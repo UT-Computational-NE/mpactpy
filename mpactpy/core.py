@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict
+from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict, Collection
 from math import isclose
 from itertools import accumulate
 
@@ -193,18 +193,23 @@ class Core():  # pylint: disable=too-many-public-methods
         self._pinmeshes  = unique(pin.pinmesh for pin in self.pins)
         self._materials  = unique_instances(material for pin in self.pins for material in pin.materials)
 
-    def with_shared_materials(self, shared: Optional[Dict[Material, Material]] = None,
-                              exclude: Optional[List[Material]] = None) -> Core:
+    def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
+                              exclude: Optional[List[Material]] = None,
+                              keep: Optional[Collection[Material]] = None) -> Core:
         """Return a rebuilt core sharing materials with equal values and MPACT specifications.
 
         Parameters
         ----------
-        shared : Optional[Dict[Material, Material]]
+        share : Optional[Dict[Material, Material]]
             The instance kept for each equivalent material. Missing materials are added.
             If omitted, a new mapping is used for this operation.
         exclude : Optional[List[Material]]
             Materials equal to any entry retain their existing instances, even if
-            an equivalent material is already in shared. Defaults to no exclusions.
+            an equivalent material is already in share. Defaults to no exclusions.
+        keep : Optional[Collection[Material]]
+            Material objects matched by identity that retain their existing instances.
+            Equal but different objects are still eligible for sharing unless excluded.
+            Use a list to retain multiple equal instances. Defaults to keeping none.
 
         Returns
         -------
@@ -212,9 +217,9 @@ class Core():  # pylint: disable=too-many-public-methods
             A rebuilt core preserving symmetry and empty assembly positions.
             The supplied core and its child components are not modified.
         """
-        if shared is None:
-            shared = {}
-        return Core([[assembly.with_shared_materials(shared, exclude) if assembly else None for assembly in row]
+        if share is None:
+            share = {}
+        return Core([[assembly.with_shared_materials(share, exclude, keep) if assembly else None for assembly in row]
                      for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt)
 
     def __eq__(self, other: Any) -> bool:
@@ -541,15 +546,16 @@ class Core():  # pylint: disable=too-many-public-methods
                                                     num_core_procs,
                                                     geometry,
                                                     child_policy,
-                                                    material_cache)
+                                                    material_cache,
+                                                    instances = self.materials + list(material_cache.values()))
 
         # Reconstruct the assembly map with overlaid assemblies
         new_assembly_map = [row[:] for row in self.assembly_map]
         for (_, _, _, i, j), overlaid in zip(assembly_work, overlaid_assemblies):
             new_assembly_map[i][j] = overlaid
 
-        shared = {material: material for material in material_cache.values()}
-        return Core([[assembly.with_shared_materials(shared) if assembly else None for assembly in row]
+        share = {material: material for material in material_cache.values()}
+        return Core([[assembly.with_shared_materials(share, keep=self.materials) if assembly else None for assembly in row]
                      for row in new_assembly_map])
 
     @staticmethod

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Any, Union, TypedDict, Tuple, Set, Optional
+from typing import Dict, List, Any, Union, TypedDict, Tuple, Optional, Collection
 from math import isclose, inf, isinf
 from copy import deepcopy
 from itertools import accumulate
@@ -263,7 +263,7 @@ class Pin():
                 for row in self.pinmesh.divide_into_quadrants()]
 
 
-    OverlayMask = Set[Material]
+    OverlayMask = Collection[Material]
 
     def has_overlay_work(self, include_only: Optional[OverlayMask] = None) -> bool:
         """Check if this pin has actual overlay work to do based on the include mask.
@@ -271,7 +271,8 @@ class Pin():
         Parameters
         ----------
         include_only : Optional[OverlayMask]
-            The set of materials to include for this pin
+            The materials to include for this pin, matched by instance.
+            A set keeps only one of several equal materials, so use a list for those.
 
         Returns
         -------
@@ -283,7 +284,8 @@ class Pin():
             return True
 
         # Check if pin contains any of the specified materials
-        return any(material in include_only for material in self.unique_materials)
+        included = {id(material) for material in include_only}
+        return any(id(material) in included for material in self.unique_materials)
 
     def overlay(self,
                 geometry:       openmc.Geometry,
@@ -301,8 +303,8 @@ class Pin():
             Offset of the OpenMC geometry's lower-left corner relative to the
             MPACT PinMesh lower-left. Default is (0.0, 0.0, 0.0)
         include_only : Optional[OverlayMask]
-            Specifies which MPACT elements should be considered during overlay.
-            If None, all elements are included.
+            The materials to overlay, matched by instance.
+            If None, all materials are included.
         overlay_policy : OverlayPolicy
             A configuration object specifying how a mesh overlay should be done.
         material_cache : Optional[Dict[int, Material]]
@@ -318,31 +320,36 @@ class Pin():
 
         material_cache = material_cache if material_cache is not None else overlay_policy.build_material_cache(geometry)
 
-        include_mats: Pin.OverlayMask = include_only if include_only else set(self.materials)
+        included = {id(material) for material in (include_only if include_only else self.materials)}
 
         openmc_materials = self.pinmesh.overlay(geometry, offset, overlay_policy, material_cache)
         assert len(openmc_materials) == len(self.materials), \
             f"len(openmc_materials) = {len(openmc_materials)} " + \
             f"len(self.materials) = {len(self.materials)}"
 
-        new_materials = [openmc_mat if openmc_mat and (old_mat in include_mats) else old_mat
+        new_materials = [openmc_mat if openmc_mat and id(old_mat) in included else old_mat
                          for openmc_mat, old_mat in zip(openmc_materials, self.materials)]
 
-        shared = {material: material for material in material_cache.values()}
-        return Pin(self.pinmesh, new_materials).with_shared_materials(shared)
+        share = {material: material for material in material_cache.values()}
+        return Pin(self.pinmesh, new_materials).with_shared_materials(share, keep=self.materials)
 
-    def with_shared_materials(self, shared: Optional[Dict[Material, Material]] = None,
-                              exclude: Optional[List[Material]] = None) -> Pin:
+    def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
+                              exclude: Optional[List[Material]] = None,
+                              keep: Optional[Collection[Material]] = None) -> Pin:
         """ Method for rebuilding this Pin so that materials with equal values and MPACT specifications are one instance
 
         Parameters
         ----------
-        shared : Optional[Dict[Material, Material]]
+        share : Optional[Dict[Material, Material]]
             The instance kept for each equivalent material. Missing materials are added.
             If omitted, a new mapping is used for this operation.
         exclude : Optional[List[Material]]
             Materials equal to any entry retain their existing instances, even if
-            an equivalent material is already in shared. Defaults to no exclusions.
+            an equivalent material is already in share. Defaults to no exclusions.
+        keep : Optional[Collection[Material]]
+            Material objects matched by identity that retain their existing instances.
+            Equal but different objects are still eligible for sharing unless excluded.
+            Use a list to retain multiple equal instances. Defaults to keeping none.
 
         Returns
         -------
@@ -350,11 +357,13 @@ class Pin():
             The rebuilt Pin
         """
 
-        if shared is None:
-            shared = {}
+        if share is None:
+            share = {}
 
         exclude = exclude or []
-        return Pin(self.pinmesh, [material if material in exclude else shared.setdefault(material, material)
+        keep_ids = {id(material) for material in keep} if keep is not None else set()
+        return Pin(self.pinmesh, [material if id(material) in keep_ids or material in exclude
+                                  else share.setdefault(material, material)
                                   for material in self.materials])
 
 

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Any, TypedDict, Tuple, Optional
+from typing import Dict, List, Any, TypedDict, Tuple, Optional, Collection
 from math import isclose
 
 import openmc
@@ -306,28 +306,35 @@ class Lattice():
                                                  num_lattice_procs,
                                                  geometry,
                                                  child_policy,
-                                                 material_cache)
+                                                 material_cache,
+                                                 instances = self.materials + list(material_cache.values()))
 
         # Reconstruct the module map with overlaid modules
         new_module_map = [row[:] for row in self.module_map]
         for (_, _, _, i, j), overlaid in zip(module_work, overlaid_modules):
             new_module_map[i][j] = overlaid
 
-        shared = {material: material for material in material_cache.values()}
-        return Lattice([[module.with_shared_materials(shared) for module in row] for row in new_module_map])
+        share = {material: material for material in material_cache.values()}
+        return Lattice([[module.with_shared_materials(share, keep=self.materials) for module in row]
+                        for row in new_module_map])
 
-    def with_shared_materials(self, shared: Optional[Dict[Material, Material]] = None,
-                              exclude: Optional[List[Material]] = None) -> Lattice:
+    def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
+                              exclude: Optional[List[Material]] = None,
+                              keep: Optional[Collection[Material]] = None) -> Lattice:
         """ Method for rebuilding this Lattice so that materials with equal values and MPACT specifications are one instance
 
         Parameters
         ----------
-        shared : Optional[Dict[Material, Material]]
+        share : Optional[Dict[Material, Material]]
             The instance kept for each equivalent material. Missing materials are added.
             If omitted, a new mapping is used for this operation.
         exclude : Optional[List[Material]]
             Materials equal to any entry retain their existing instances, even if
-            an equivalent material is already in shared. Defaults to no exclusions.
+            an equivalent material is already in share. Defaults to no exclusions.
+        keep : Optional[Collection[Material]]
+            Material objects matched by identity that retain their existing instances.
+            Equal but different objects are still eligible for sharing unless excluded.
+            Use a list to retain multiple equal instances. Defaults to keeping none.
 
         Returns
         -------
@@ -335,10 +342,10 @@ class Lattice():
             The rebuilt Lattice
         """
 
-        if shared is None:
-            shared = {}
+        if share is None:
+            share = {}
 
-        return Lattice([[module.with_shared_materials(shared, exclude) for module in row] for row in self.module_map])
+        return Lattice([[module.with_shared_materials(share, exclude, keep) for module in row] for row in self.module_map])
 
     @staticmethod
     def _process_module_chunk(module_chunk, geometry, child_policy, material_cache):
