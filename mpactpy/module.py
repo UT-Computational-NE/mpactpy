@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Any, TypedDict, Tuple, Optional
+from typing import Dict, List, Any, TypedDict, Tuple, Optional, Collection
 from math import isclose
 
 import openmc
@@ -324,23 +324,34 @@ class Module():
                                               num_module_procs,
                                               geometry,
                                               child_policy,
-                                              material_cache)
+                                              material_cache,
+                                              instances = self.materials + list(material_cache.values()))
 
         # Reconstruct the pin map with overlaid pins
         new_pin_map = [row[:] for row in self.pin_map]
         for (_, _, _, i, j), overlaid in zip(pin_work, overlaid_pins):
             new_pin_map[i][j] = overlaid
 
-        shared = {material: material for material in material_cache.values()}
-        return Module(1, [[pin.with_shared_materials(shared) for pin in row] for row in new_pin_map])
+        share = {material: material for material in material_cache.values()}
+        return Module(1, new_pin_map).with_shared_materials(share, keep=self.materials)
 
-    def with_shared_materials(self, shared: Dict[Material, Material]) -> Module:
-        """ Method for rebuilding this Module so that materials with the same composition are one instance
+    def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
+                              exclude: Optional[Collection[Material]] = None,
+                              keep: Optional[Collection[Material]] = None) -> Module:
+        """ Method for rebuilding this Module so that materials with equal values and MPACT specifications are one instance
 
         Parameters
         ----------
-        shared : Dict[Material, Material]
-            The instance kept for each composition.  Compositions not yet in it are added.
+        share : Optional[Dict[Material, Material]]
+            The instance kept for each equivalent material. Missing materials are added.
+            If omitted, a new mapping is used for this operation.
+        exclude : Optional[Collection[Material]]
+            Materials equal to any entry retain their existing instances, even if
+            an equivalent material is already in share. Defaults to no exclusions.
+        keep : Optional[Collection[Material]]
+            Material objects matched by identity that retain their existing instances.
+            Equal but different objects are still eligible for sharing unless excluded.
+            Use a list to retain multiple equal instances. Defaults to keeping none.
 
         Returns
         -------
@@ -348,7 +359,10 @@ class Module():
             The rebuilt Module
         """
 
-        return Module(self.nz, [[pin.with_shared_materials(shared) for pin in row] for row in self.pin_map])
+        if share is None:
+            share = {}
+
+        return Module(self.nz, [[pin.with_shared_materials(share, exclude, keep) for pin in row] for row in self.pin_map])
 
     @staticmethod
     def _process_pin_chunk(pin_chunk, geometry, child_policy, material_cache):
