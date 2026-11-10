@@ -1,4 +1,5 @@
 import pytest
+from dataclasses import FrozenInstanceError
 from math import isclose
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
@@ -28,7 +29,7 @@ def equal_material():
                                is_depletable    = False,
                                has_resonance    = False,
                                is_fuel          = False)
-    return Material(temp, numd, spec)
+    return Material(temp, numd, spec, name="UO2 4 wt%")
 
 @pytest.fixture
 def unequal_material():
@@ -57,6 +58,20 @@ def test_material_initialization(material):
     numd["H1"] = 2e-3
     assert material.number_densities == {"H1": 1e-3}
 
+    replacements = {"C": "C_in_Graphite"}
+    specs = Material.MPACTSpecs(replacements)
+    replacements.clear()
+    assert specs.replace_isotopes == {"C": "C_in_Graphite"}
+    with pytest.raises(TypeError):
+        specs.replace_isotopes["C"] = "C"
+    with pytest.raises(FrozenInstanceError):
+        specs.is_fluid = True
+    with pytest.raises(FrozenInstanceError):
+        specs.material_type = 1
+    for name in ["1Fuel", "Éau", "f", "G/CC", "at%", "Fuel\t1", "Fuel \"1\"", "Fuel\\1", "Fuel!1"]:
+        with pytest.raises(AssertionError):
+            Material(300.0, {"H1": 1e-3}, name=name)
+
 def test_using_fission_products():
     specs = Material.MPACTSpecs(replace_isotopes = {"H": "H1_in_ZrH"},
                                 is_depletable    = True,
@@ -77,13 +92,22 @@ def test_using_fission_products():
 def test_material_equality(material, equal_material, unequal_material):
     assert material == equal_material
     assert material != unequal_material
+    plain = Material(material.temperature, dict(material.number_densities), Material.MPACTSpecs(is_fluid=True))
+    assert material != plain
 
 def test_material_hash(material, equal_material, unequal_material):
     assert hash(material) == hash(equal_material)
     assert hash(material) != hash(unequal_material)
     denser_material = Material(300.0, {"U235": 2e-3, "C": 4e-3}, Material.MPACTSpecs(is_fluid=True))
     assert hash(material) != hash(denser_material)
+    specs = Material.MPACTSpecs({"C": "C_in_Graphite", "H": "H1"})
+    reordered = Material.MPACTSpecs({"H": "H1", "C": "C_in_Graphite"})
+    assert specs == reordered
+    assert hash(specs) == hash(reordered)
+    plain = Material(material.temperature, dict(material.number_densities), Material.MPACTSpecs(is_fluid=True))
+    assert len({material, plain}) == 2
     equal_material.temperature = 600.0
+    assert equal_material._cached_hash is None
     assert hash(material) != hash(equal_material)
 
 def hash_material(material):
@@ -94,6 +118,9 @@ def test_material_hash_across_processes(material):
     with ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn")) as executor:
         returned_material = executor.submit(hash_material, material).result()
     assert hash(returned_material) == hash(material)
+    assert returned_material == material
+    with pytest.raises(TypeError):
+        returned_material.replace_isotopes["C"] = "C"
 
 def test_material_from_openmc_material():
     openmc_material = openmc.Material()
@@ -146,22 +173,22 @@ def test_material_temperature_units():
     assert output == expected_output
 
 def test_material_percents():
-    material = Material(293.15, percents={"H1": 2.0, "O16": 1.0}, percent_unit="at%", density=1.0)
+    material = Material(293.15, percents={"H1": 2.0, "O16": 1.0}, percent_unit="at%", density=1.0, name="Water")
     assert isclose(material.number_densities["H1"],  6.687342530e-2, rel_tol=TOL)
     assert isclose(material.number_densities["O16"], 3.343671265e-2, rel_tol=TOL)
 
     output = material.write_to_string(prefix="  ")
-    expected_output = ("  mat 1 0 1.0 g/cc 293.15 K (at%) \\\n"
+    expected_output = ("  mat 1 0 Water 1.0 g/cc 293.15 K (at%) \\\n"
                        "    1001 2.0\n"
                        "    8016 1.0\n")
     assert output == expected_output
 
-    material = Material(293.15, percents={"H1": 11.19, "O16": 88.81}, percent_unit="WT%", density=1.0)
+    material = Material(293.15, percents={"H1": 11.19, "O16": 88.81}, percent_unit="WT%", density=1.0, name="Light water")
     assert isclose(material.number_densities["H1"],  6.686453796e-2, rel_tol=TOL)
     assert isclose(material.number_densities["O16"], 3.343727263e-2, rel_tol=TOL)
 
     output = material.write_to_string(prefix="  ")
-    expected_output = ("  mat 1 0 1.0 g/cc 293.15 K (wt%) \\\n"
+    expected_output = ("  mat 1 0 \"Light water\" 1.0 g/cc 293.15 K (wt%) \\\n"
                        "    1001 11.19\n"
                        "    8016 88.81\n")
     assert output == expected_output

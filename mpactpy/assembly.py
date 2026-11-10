@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Any, Tuple, Optional, Dict, TypedDict
+from typing import List, Any, Tuple, Optional, Dict, TypedDict, Collection
 from math import isclose
 
 import openmc
@@ -320,23 +320,34 @@ class Assembly():
                                                   num_assembly_procs,
                                                   geometry,
                                                   child_policy,
-                                                  material_cache)
+                                                  material_cache,
+                                                  instances = self.materials + list(material_cache.values()))
 
         # Reconstruct the lattice map with overlaid lattices
         new_lattice_map = self.lattice_map[:]
         for (_, _, _, i), overlaid in zip(lattice_work, overlaid_lattices):
             new_lattice_map[i] = overlaid
 
-        shared = {material: material for material in material_cache.values()}
-        return Assembly([lattice.with_shared_materials(shared) for lattice in new_lattice_map])
+        share = {material: material for material in material_cache.values()}
+        return Assembly(new_lattice_map).with_shared_materials(share, keep=self.materials)
 
-    def with_shared_materials(self, shared: Dict[Material, Material]) -> Assembly:
-        """ Method for rebuilding this Assembly so that materials with the same composition are one instance
+    def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
+                              exclude: Optional[Collection[Material]] = None,
+                              keep: Optional[Collection[Material]] = None) -> Assembly:
+        """ Method for rebuilding this Assembly so that materials with equal values and MPACT specifications are one instance
 
         Parameters
         ----------
-        shared : Dict[Material, Material]
-            The instance kept for each composition.  Compositions not yet in it are added.
+        share : Optional[Dict[Material, Material]]
+            The instance kept for each equivalent material. Missing materials are added.
+            If omitted, a new mapping is used for this operation.
+        exclude : Optional[Collection[Material]]
+            Materials equal to any entry retain their existing instances, even if
+            an equivalent material is already in share. Defaults to no exclusions.
+        keep : Optional[Collection[Material]]
+            Material objects matched by identity that retain their existing instances.
+            Equal but different objects are still eligible for sharing unless excluded.
+            Use a list to retain multiple equal instances. Defaults to keeping none.
 
         Returns
         -------
@@ -344,7 +355,10 @@ class Assembly():
             The rebuilt Assembly
         """
 
-        return Assembly([lattice.with_shared_materials(shared) for lattice in self.lattice_map])
+        if share is None:
+            share = {}
+
+        return Assembly([lattice.with_shared_materials(share, exclude, keep) for lattice in self.lattice_map])
 
     @staticmethod
     def _process_lattice_chunk(lattice_chunk, geometry, child_policy, material_cache):

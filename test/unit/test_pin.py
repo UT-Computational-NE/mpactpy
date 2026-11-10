@@ -65,6 +65,34 @@ def test_pin_initialization(pin, pinmesh, material):
     assert pin.materials      == [material for _ in range(number_of_material_regions)]
     assert_allclose([pin.pitch[i] for i in ['X','Y','Z']], [2., 2., 3.])
 
+    materials = [material] + [deepcopy(material)] * (number_of_material_regions - 1)
+    separate = Pin(pinmesh, materials)
+    assert len(separate.unique_materials) == 2
+    shared_materials = {}
+    for shared in [separate.with_shared_materials(), separate.with_shared_materials(share=shared_materials)]:
+        assert len(shared.unique_materials) == 1
+        assert all(mat is material for mat in shared.materials)
+    assert separate.materials[1] is materials[1]
+    assert len(separate.unique_materials) == 2
+    assert len(shared_materials) == 1
+    assert separate.with_shared_materials(shared_materials, exclude=[deepcopy(material)]) == separate
+    assert separate.with_shared_materials(share=shared_materials, keep=[separate.materials[-1]]) == separate
+    assert len(separate.with_shared_materials(keep=[deepcopy(separate.materials[0])]).unique_materials) == 1
+    plain = Material(material.temperature, dict(material.number_densities), Material.MPACTSpecs(is_fluid=True))
+    distinct = Pin(pinmesh, [plain] + materials[1:]).with_shared_materials()
+    assert len(distinct.unique_materials) == 2
+    mixed = Pin(pinmesh, [material, deepcopy(material), plain, deepcopy(plain)] + materials[4:])
+    excluded = mixed.with_shared_materials(exclude=[deepcopy(material)])
+    assert excluded.materials[0] is material
+    assert excluded.materials[1] is mixed.materials[1]
+    assert excluded.materials[2] is excluded.materials[3] is plain
+    mixed_shared = mixed.with_shared_materials(share={}, exclude=[deepcopy(plain)], keep=[material])
+    assert mixed_shared.materials[0] is material
+    assert mixed_shared.materials[1] is mixed_shared.materials[4]
+    assert mixed_shared.materials[1] is not material
+    assert mixed_shared.materials[2] is plain
+    assert mixed_shared.materials[3] is mixed.materials[3]
+
 def test_pin_equality(pin, equal_pin, unequal_pin, equal_material):
     assert pin == equal_pin
     assert pin != unequal_pin
@@ -173,6 +201,11 @@ def test_pin_overlay(openmc_pin, template_pin, template_material, overlay_materi
     pin          = template_pin.overlay(geometry, offset, include_only, overlay_policy, overlay_material_cache)
     expected_pin = overlay_pin
     assert pin == expected_pin
+
+    given = [deepcopy(template_material)] * 9 + [deepcopy(overlay_pin.materials[0])] * 9
+    pin   = Pin(template_pin.pinmesh, given + template_pin.materials[18:]).overlay(geometry, offset, include_only,
+                                                                                 overlay_policy, overlay_material_cache)
+    assert pin == Pin(template_pin.pinmesh, given + overlay_pin.materials[18:])
 
 
 def test_build_gcyl_pin(material):

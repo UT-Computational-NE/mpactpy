@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict, get_args
+from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict, Collection, get_args
 from math import isclose
 from itertools import accumulate
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from mpactpy.utils import list_to_str, num_to_str, relative_round, unique_instan
                           process_parallel_work, ROUNDING_RELATIVE_TOLERANCE as TOL
 
 
-class Core():
+class Core():  # pylint: disable=too-many-public-methods
     """ Core of an MPACT model
 
     Parameters
@@ -302,6 +302,35 @@ class Core():
         self._pinmeshes  = unique(pin.pinmesh for pin in self.pins)
         self._materials  = unique_instances([material for pin in self.pins for material in pin.materials] +
                                             (crd_specs.materials if crd_specs else []))
+
+    def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
+                              exclude: Optional[Collection[Material]] = None,
+                              keep: Optional[Collection[Material]] = None) -> Core:
+        """Return a rebuilt core sharing materials with equal values and MPACT specifications.
+
+        Parameters
+        ----------
+        share : Optional[Dict[Material, Material]]
+            The instance kept for each equivalent material. Missing materials are added.
+            If omitted, a new mapping is used for this operation.
+        exclude : Optional[Collection[Material]]
+            Materials equal to any entry retain their existing instances, even if
+            an equivalent material is already in share. Defaults to no exclusions.
+        keep : Optional[Collection[Material]]
+            Material objects matched by identity that retain their existing instances.
+            Equal but different objects are still eligible for sharing unless excluded.
+            Use a list to retain multiple equal instances. Defaults to keeping none.
+
+        Returns
+        -------
+        Core
+            A rebuilt core preserving symmetry and empty assembly positions.
+            The supplied core and its child components are not modified.
+        """
+        if share is None:
+            share = {}
+        return Core([[assembly.with_shared_materials(share, exclude, keep) if assembly else None for assembly in row]
+                     for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt)
 
     def __eq__(self, other: Any) -> bool:
         if self is other:
@@ -630,16 +659,16 @@ class Core():
                                                     num_core_procs,
                                                     geometry,
                                                     child_policy,
-                                                    material_cache)
+                                                    material_cache,
+                                                    instances = self.materials + list(material_cache.values()))
 
         # Reconstruct the assembly map with overlaid assemblies
         new_assembly_map = [row[:] for row in self.assembly_map]
         for (_, _, _, i, j), overlaid in zip(assembly_work, overlaid_assemblies):
             new_assembly_map[i][j] = overlaid
 
-        shared = {material: material for material in material_cache.values()}
-        return Core([[assembly.with_shared_materials(shared) if assembly else None for assembly in row]
-                     for row in new_assembly_map])
+        share = {material: material for material in material_cache.values()}
+        return Core(new_assembly_map).with_shared_materials(share, keep=self.materials)
 
     @staticmethod
     def _process_assembly_chunk(assembly_chunk, geometry, child_policy, material_cache):

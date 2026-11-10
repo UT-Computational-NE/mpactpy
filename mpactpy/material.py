@@ -33,9 +33,14 @@ class Material():
         The unit of the percents, in any case: 'at%' for atom percent (default) or 'wt%' for weight percent
     density : float
         The density (g/cc). Required with `percents`, otherwise computed from `number_densities`.
+    name : Optional[str]
+        The material name, written in double quotes if it has a space. It must start with an ASCII letter,
+        not be a unit string, and contain no '"', '\\', '!' or whitespace other than spaces.
 
     Attributes
     ----------
+    name : Optional[str]
+        The material name, if any
     density : float
         The density (g/cc)
     temperature : float
@@ -60,14 +65,15 @@ class Material():
         Boolean flag indicating whether or not the material is fuel
     """
 
-    @dataclass
+    @dataclass(frozen=True)
     class MPACTSpecs():
-        """ A dataclass for specifications for how a material should be handled in MPACT
+        """ Immutable specifications for how a material should be handled in MPACT
 
         Attributes
         ----------
-        replace_isotopes : Dict[str, str]
-            Dictionary of isotopes IDs to replace when writing the MPACT input
+        replace_isotopes : Mapping[str, str]
+            Read-only mapping of isotope IDs to replace when writing the MPACT input.
+            The supplied mapping is copied at construction.
             (key: original isotope ID, value: replacement isotope ID)
         is_fluid : bool
             Whether the material is a fluid (Default: False)
@@ -86,12 +92,12 @@ class Material():
             Section 4.5 pg 27
         """
 
-        replace_isotopes: Dict[str, str] = field(default_factory=dict)
+        replace_isotopes: Mapping[str, str] = field(default_factory=dict)
         is_fluid:         bool = False
         is_depletable:    bool = False
         has_resonance:    bool = False
         is_fuel:          bool = False
-        material_type:    int  = 0
+        material_type:    int  = field(init=False)
 
         def __post_init__(self):
 
@@ -109,9 +115,20 @@ class Material():
 
             key = (self.is_fluid, self.is_depletable, self.has_resonance, self.is_fuel)
             assert key in material_type_mapping, f"Invalid material combination: {key}"
-            self.material_type = material_type_mapping[key]
+            object.__setattr__(self, "material_type", material_type_mapping[key])
+            object.__setattr__(self, "replace_isotopes", MappingProxyType(dict(self.replace_isotopes)))
             assert all(value in MPACT_SUPPORTED_ISOTOPE_IDS for value in self.replace_isotopes.values()), \
                 f"Invalid replacement isotope ID: {self.replace_isotopes.values()}"
+
+        def __hash__(self) -> int:
+            return hash((self.is_fluid, self.is_depletable, self.has_resonance, self.is_fuel,
+                         tuple(sorted(self.replace_isotopes.items()))))
+
+        def __reduce__(self):
+            # Mapping proxies cannot be pickled directly. Reconstruct through the
+            # constructor to preserve immutability during copying and worker transfer.
+            return (type(self), (dict(self.replace_isotopes), self.is_fluid,
+                                 self.is_depletable, self.has_resonance, self.is_fuel))
 
         def using_fission_product_ids(self, exclude: Optional[List[str]] = None) -> Material.MPACTSpecs:
             """Return a copy that replaces isotopes with their fission-product IDs.
@@ -140,12 +157,16 @@ class Material():
             }
 
             return Material.MPACTSpecs(
-                replace_isotopes = fission_product_replacements | self.replace_isotopes,
+                replace_isotopes = fission_product_replacements | dict(self.replace_isotopes),
                 is_fluid         = self.is_fluid,
                 is_depletable    = self.is_depletable,
                 has_resonance    = self.has_resonance,
                 is_fuel          = self.is_fuel
             )
+
+    @property
+    def name(self) -> Optional[str]:
+        return self._name
 
     @property
     def density(self) -> float:
@@ -178,7 +199,7 @@ class Material():
         return MappingProxyType(self._number_densities)
 
     @property
-    def replace_isotopes(self) -> Dict[str, str]:
+    def replace_isotopes(self) -> Mapping[str, str]:
         return self._mpact_specs.replace_isotopes
 
     @property
@@ -205,6 +226,7 @@ class Material():
                  percents:                    Dict[str, float] = None,
                  percent_unit:                str = "at%",
                  density:                     float = None,
+                 name:                        Optional[str] = None,
     ):
 
         self._cached_hash = None
@@ -213,7 +235,12 @@ class Material():
             f"number_densities = {number_densities}, percents = {percents}, expected exactly one"
         assert temperature_unit.upper() in MPACT_TEMPERATURE_UNITS, f"temperature_unit = {temperature_unit}"
         assert percent_unit.lower() in MPACT_PERCENT_UNITS, f"percent_unit = {percent_unit}"
+        assert name is None or (name[:1].isascii() and name[:1].isalpha() and
+                                name.upper() not in MPACT_UNIT_STRINGS    and
+                                name.isprintable()                        and
+                                not any(char in name for char in '"\\!')), f"name = {name}"
 
+        self._name             = name
         self._temperature_unit = temperature_unit.upper()
         offset, scale          = MPACT_TEMPERATURE_UNITS[self._temperature_unit]
         self._temperature      = (temperature + offset) * scale
@@ -252,7 +279,7 @@ class Material():
         if self is other:
             return True
         return (isinstance(other, Material)                                           and
-                self._mpact_specs.material_type == other._mpact_specs.material_type   and
+                self._mpact_specs == other._mpact_specs                               and
                 isclose(self.temperature, other.temperature, rel_tol=TOL)             and
                 self.number_densities.keys() == other.number_densities.keys()         and
                 all(isclose(self.number_densities[iso], other.number_densities[iso], rel_tol=TOL)
@@ -263,7 +290,7 @@ class Material():
         if self._cached_hash is None:
             number_densities = sorted((iso, relative_round(numd, TOL))
                                       for iso, numd in self.number_densities.items())
-            self._cached_hash = hash((self._mpact_specs.material_type,
+            self._cached_hash = hash((self._mpact_specs,
                                      relative_round(self.temperature, TOL),
                                      tuple(number_densities)))
         return self._cached_hash
@@ -613,7 +640,9 @@ class Material():
 
         unit_tag = "" if self.percents is None else f" ({self.percent_unit})"
         mpact_id = 1 if mpact_ids is None else mpact_ids[id(self)]
-        string = prefix + f"mat {mpact_id} {self._mpact_specs.material_type} " + \
+        quote    = '"' if self.name is not None and " " in self.name else ""
+        name_tag = "" if self.name is None else f"{quote}{self.name}{quote} "
+        string = prefix + f"mat {mpact_id} {self._mpact_specs.material_type} {name_tag}" + \
                           f"{self.density} g/cc {temperature} {self._temperature_unit}{unit_tag} \\\n"
 
         for iso, amount in sorted(mpact_composition.items()):
@@ -641,6 +670,11 @@ MPACT_TEMPERATURE_UNITS = {"K": (0.,     1.),
 # MPACT units for compositions given in percents
 # "MPACT Native Input User's Manual", Version 4.4, Section 4.5.1 pg 28
 MPACT_PERCENT_UNITS = ["at%", "wt%"]
+
+
+# MPACT unit strings, which a material name must not be
+# "MPACT Native Input User's Manual", Version 4.4, Section 4.5.1 pg 27-28
+MPACT_UNIT_STRINGS = [*MPACT_TEMPERATURE_UNITS, "G/CC", *(unit.upper() for unit in MPACT_PERCENT_UNITS)]
 
 
 # Isotopes with distinct MPACT IDs when present as fission products
