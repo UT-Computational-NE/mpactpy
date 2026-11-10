@@ -1,4 +1,5 @@
 import pytest
+from copy import deepcopy
 from math import isclose
 from numpy.testing import assert_allclose
 
@@ -72,6 +73,20 @@ def test_lattice_initialization(lattice, module):
     assert_allclose([lattice.pitch[i] for i in ['X','Y','Z']], [8., 8., 3.])
     assert all([m == module for row in lattice.module_map for m in row])
 
+    module_map = [[module, deepcopy(module)]]
+    separate = Lattice(module_map)
+    assert len(separate.materials) == 2
+    shared_materials = {}
+    for shared in [separate.with_shared_materials(), separate.with_shared_materials(share=shared_materials)]:
+        assert len(shared.materials) == 1
+        assert shared.materials[0] is separate.materials[0]
+        assert all(material is shared.materials[0] for pin in shared.pins for material in pin.materials)
+    assert len(separate.materials) == 2
+    assert len(shared_materials) == 1
+    assert separate.with_shared_materials(shared_materials, exclude=[deepcopy(separate.materials[0])]) == separate
+    assert separate.with_shared_materials(share=shared_materials, keep=[separate.materials[-1]]) == separate
+    assert len(separate.with_shared_materials(keep=[deepcopy(separate.materials[0])]).materials) == 1
+
 def test_lattice_equality(lattice, equal_lattice, unequal_lattice):
     assert lattice == equal_lattice
     assert lattice != unequal_lattice
@@ -114,7 +129,8 @@ def test_lattice_with_height(lattice_2D):
     lattice = lattice_2D.with_height(3.0)
     assert isclose(lattice.pitch['Z'], 3.0)
 
-def test_module_overlay(openmc_lattice, template_lattice, template_module, template_pin, template_material, overlay_material_cache, overlay_lattice):
+def test_module_overlay(openmc_lattice, template_lattice, template_module, template_pin, template_material, overlay_material_cache, overlay_lattice,
+                        material, equal_material):
     geometry                          = openmc_lattice
     offset                            = (-6.0, -6.0, 0.0)
     overlay_policy                    = PinMesh.OverlayPolicy(method="centroid")
@@ -125,3 +141,10 @@ def test_module_overlay(openmc_lattice, template_lattice, template_module, templ
     lattice          = template_lattice.overlay(geometry, offset, include_only, overlay_policy, overlay_material_cache)
     expected_lattice = overlay_lattice
     assert lattice == expected_lattice
+
+    pins    = [Pin(template_pin.pinmesh, [m] * 9 + template_pin.materials[9:]) for m in [material, equal_material]]
+    module  = Module(1, [pins, pins])
+    lattice = Lattice([[module, module], [module, module]]).overlay(geometry, offset, {module: {pin: pin_mask for pin in pins}},
+                                                                    PinMesh.OverlayPolicy(method="centroid", num_procs=2),
+                                                                    overlay_material_cache)
+    assert {id(material), id(equal_material)} <= {id(m) for m in lattice.materials}
