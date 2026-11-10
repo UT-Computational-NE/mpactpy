@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict, Collection, get_args
 from math import isclose
 from itertools import accumulate
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import openmc
 
@@ -329,8 +329,22 @@ class Core():  # pylint: disable=too-many-public-methods
         """
         if share is None:
             share = {}
-        return Core([[assembly.with_shared_materials(share, exclude, keep) if assembly else None for assembly in row]
-                     for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt)
+
+        assembly_map = [[assembly.with_shared_materials(share, exclude, keep) if assembly else None for assembly in row]
+                        for row in self.assembly_map]
+
+        crd_specs = self.crd_specs
+        if crd_specs:
+            exclude  = exclude or []
+            keep_ids = {id(material) for material in keep} if keep is not None else set()
+
+            def shared(material: Material) -> Material:
+                return material if id(material) in keep_ids or material in exclude else share.setdefault(material, material)
+
+            crd_specs = replace(crd_specs, control_materials = [shared(material) for material in crd_specs.control_materials],
+                                           swap_material     = shared(crd_specs.swap_material))
+
+        return Core(assembly_map, self.symmetry_opt, self.quarter_sym_opt, crd_bank=self.crd_bank, crd_specs=crd_specs)
 
     def __eq__(self, other: Any) -> bool:
         if self is other:

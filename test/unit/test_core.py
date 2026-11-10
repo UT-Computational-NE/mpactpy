@@ -139,6 +139,15 @@ def test_core_initialization(core, assembly, material, equal_material):
     assert separate.with_shared_materials(share=shared_materials, keep=[separate.materials[-1]]) == separate
     assert len(separate.with_shared_materials(keep=[deepcopy(separate.materials[0])]).materials) == 1
 
+    rodded = Core(assembly_map, crd_bank=[["A", None]],
+                  crd_specs=Core.CrdSpecs([separate.materials[-1]], equal_material, 38.1, 960, "top"))
+    shared = rodded.with_shared_materials()
+    assert shared.crd_bank == rodded.crd_bank
+    assert len(shared.materials) == 1
+    assert all(material is shared.materials[0] for material in shared.crd_specs.materials)
+    for kwargs in [{"keep": rodded.materials}, {"exclude": [material]}]:
+        assert rodded.with_shared_materials(**kwargs).crd_specs == rodded.crd_specs
+
 def test_core_equality(core, equal_core, unequal_core, assembly, material, equal_material):
     assert core == equal_core
     assert core != unequal_core
