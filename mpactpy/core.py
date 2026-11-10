@@ -223,6 +223,8 @@ class Core():  # pylint: disable=too-many-public-methods
 
     def _with_materials(self, replacements: Dict[int, Material]) -> Core:
         """Rebuild this core's assemblies using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
         return Core([[assembly._with_materials(replacements) if assembly else None for assembly in row]
                      for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt)
 

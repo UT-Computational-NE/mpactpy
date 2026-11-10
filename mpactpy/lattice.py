@@ -347,6 +347,8 @@ class Lattice():
 
     def _with_materials(self, replacements: Dict[int, Material]) -> Lattice:
         """Rebuild this lattice's modules using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
         return Lattice([[module._with_materials(replacements) for module in row] for row in self.module_map])
 
     @staticmethod

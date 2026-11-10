@@ -360,6 +360,8 @@ class Assembly():
 
     def _with_materials(self, replacements: Dict[int, Material]) -> Assembly:
         """Rebuild this assembly's lattices using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
         return Assembly([lattice._with_materials(replacements) for lattice in self.lattice_map])
 
     @staticmethod

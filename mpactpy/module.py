@@ -351,6 +351,8 @@ class Module():
 
     def _with_materials(self, replacements: Dict[int, Material]) -> Module:
         """Rebuild this module's pins using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
         return Module(self.nz, [[pin._with_materials(replacements) for pin in row] for row in self.pin_map])
 
     @staticmethod
