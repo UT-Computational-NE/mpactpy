@@ -319,10 +319,10 @@ class Module():
             new_pin_map[i][j] = overlaid
 
         share = {material: material for material in material_cache.values()}
-        return Module(1, [[pin.with_shared_materials(share, keep=self.materials) for pin in row] for row in new_pin_map])
+        return Module(1, new_pin_map).with_shared_materials(share, keep=self.materials)
 
     def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
-                              exclude: Optional[List[Material]] = None,
+                              exclude: Optional[Collection[Material]] = None,
                               keep: Optional[Collection[Material]] = None) -> Module:
         """ Method for rebuilding this Module so that materials with equal values and MPACT specifications are one instance
 
@@ -331,7 +331,7 @@ class Module():
         share : Optional[Dict[Material, Material]]
             The instance kept for each equivalent material. Missing materials are added.
             If omitted, a new mapping is used for this operation.
-        exclude : Optional[List[Material]]
+        exclude : Optional[Collection[Material]]
             Materials equal to any entry retain their existing instances, even if
             an equivalent material is already in share. Defaults to no exclusions.
         keep : Optional[Collection[Material]]

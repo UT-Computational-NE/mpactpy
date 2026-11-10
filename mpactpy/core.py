@@ -194,7 +194,7 @@ class Core():  # pylint: disable=too-many-public-methods
         self._materials  = unique_instances(material for pin in self.pins for material in pin.materials)
 
     def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
-                              exclude: Optional[List[Material]] = None,
+                              exclude: Optional[Collection[Material]] = None,
                               keep: Optional[Collection[Material]] = None) -> Core:
         """Return a rebuilt core sharing materials with equal values and MPACT specifications.
 
@@ -203,7 +203,7 @@ class Core():  # pylint: disable=too-many-public-methods
         share : Optional[Dict[Material, Material]]
             The instance kept for each equivalent material. Missing materials are added.
             If omitted, a new mapping is used for this operation.
-        exclude : Optional[List[Material]]
+        exclude : Optional[Collection[Material]]
             Materials equal to any entry retain their existing instances, even if
             an equivalent material is already in share. Defaults to no exclusions.
         keep : Optional[Collection[Material]]
@@ -555,8 +555,7 @@ class Core():  # pylint: disable=too-many-public-methods
             new_assembly_map[i][j] = overlaid
 
         share = {material: material for material in material_cache.values()}
-        return Core([[assembly.with_shared_materials(share, keep=self.materials) if assembly else None for assembly in row]
-                     for row in new_assembly_map])
+        return Core(new_assembly_map).with_shared_materials(share, keep=self.materials)
 
     @staticmethod
     def _process_assembly_chunk(assembly_chunk, geometry, child_policy, material_cache):
