@@ -11,6 +11,7 @@ import openmc
 from mpactpy.utils import atomic_mass, AVOGADRO, ROOM_TEMPERATURE, \
                           relative_round, ROUNDING_RELATIVE_TOLERANCE as TOL
 
+
 class Material():
     """ Class for specifying materials of an MPACT model
 

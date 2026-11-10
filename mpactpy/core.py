@@ -11,7 +11,8 @@ from mpactpy.pin import Pin
 from mpactpy.module import Module
 from mpactpy.lattice import Lattice
 from mpactpy.assembly import Assembly
-from mpactpy.utils import list_to_str, unique_instances, is_rectangular, unique, process_parallel_work
+from mpactpy.utils import list_to_str, unique_instances, is_rectangular, unique, process_parallel_work, \
+                          build_material_sharing_map
 
 
 class Core():  # pylint: disable=too-many-public-methods
@@ -217,9 +218,12 @@ class Core():  # pylint: disable=too-many-public-methods
             A rebuilt core preserving symmetry and empty assembly positions.
             The supplied core and its child components are not modified.
         """
-        if share is None:
-            share = {}
-        return Core([[assembly.with_shared_materials(share, exclude, keep) if assembly else None for assembly in row]
+        replacements = build_material_sharing_map(self.materials, share, exclude, keep)
+        return self._with_materials(replacements)
+
+    def _with_materials(self, replacements: Dict[int, Material]) -> Core:
+        """Rebuild this core's assemblies using the resolved material-instance mapping."""
+        return Core([[assembly._with_materials(replacements) if assembly else None for assembly in row]
                      for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt)
 
     def __eq__(self, other: Any) -> bool:
