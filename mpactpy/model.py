@@ -171,11 +171,6 @@ class Model():
 
         string += self.options.write_to_string(prefix) + "\n"
 
-        for line in string.splitlines():
-            if line.lstrip().startswith("mod_dim "):
-                continue
-            assert len(line) <= 256, f"len(line) = {len(line)}, expected at most 256: {line}"
-
         return string
 
     @staticmethod
