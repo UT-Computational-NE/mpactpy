@@ -11,6 +11,7 @@ from mpactpy.pin import Pin
 from mpactpy.module import Module
 from mpactpy.lattice import Lattice
 from mpactpy.assembly import Assembly
+from mpactpy.comments import Comments, write_line, assert_keys_written
 from mpactpy.utils import list_to_str, unique_instances, is_rectangular, unique, process_parallel_work, \
                           build_material_sharing_map
 
@@ -33,6 +34,9 @@ class Core():  # pylint: disable=too-many-public-methods
         produces a mesh element with an axial height less than the minimum thickness,
         an error will be thrown.  This is meant as a failsafe for applications in which
         a minimum axial thickness is required.
+    comments : Dict[Optional[int], Comments]
+        The comments of each line of the `core` card
+        (key: None for the `core` line, else the `assembly_map` row index)
 
     Attributes
     ----------
@@ -72,6 +76,10 @@ class Core():  # pylint: disable=too-many-public-methods
         The unique pin meshes of this core
     materials : List[Material]
         The unqiue materials of this core
+    comments : Dict[Optional[int], Comments]
+        The comments of each line of the `core` card
+        (key: None for the `core` line, else the `assembly_map` row index).
+        Rows that are all empty at the edges of the map are not written and take no comments.
     """
 
     SymmetryOption = Literal["360", "90", ""]
@@ -153,12 +161,17 @@ class Core():  # pylint: disable=too-many-public-methods
     def materials(self) -> List[Material]:
         return self._materials
 
+    @property
+    def comments(self) -> Dict[Optional[int], Comments]:
+        return self._comments
+
 
     def __init__(self,
                  assembly_map: List[List[Assembly]],
                  symmetry_opt: SymmetryOption = "",
                  quarter_sym_opt: QuarterSymmetryOption = "",
-                 min_thickness: float = 0.):
+                 min_thickness: float = 0.,
+                 comments: Dict[Optional[int], Comments] = None):
 
         self._cached_hash = None
 
@@ -167,6 +180,7 @@ class Core():  # pylint: disable=too-many-public-methods
         self._symmetry_opt    = symmetry_opt
         self._quarter_sym_opt = quarter_sym_opt
         self._assembly_map    = assembly_map
+        self._comments        = dict(comments) if comments else {}
 
         self._assemblies = unique(assembly for row in self.assembly_map for assembly in row if assembly)
 
@@ -266,7 +280,8 @@ class Core():  # pylint: disable=too-many-public-methods
             The string that represents the
         """
 
-        assembly_map = self._trim_empty_boundary(self.assembly_map)
+        assembly_map, first_row = self._trim_empty_boundary(self.assembly_map)
+        assert_keys_written(self.comments, range(first_row, first_row + len(assembly_map)))
 
         if assembly_mpact_ids is None:
             assemblies = unique(assembly for row in assembly_map for assembly in row if assembly)
@@ -275,21 +290,21 @@ class Core():  # pylint: disable=too-many-public-methods
         id_length = max(len(str(assembly_mpact_ids[assembly])) if assembly is not None else 0
                         for row in assembly_map for assembly in row)
 
-        string = prefix + "core"
+        string = "core"
         if len(self.symmetry_opt)    > 0:
             string += f" {self.symmetry_opt}"
         if len(self.quarter_sym_opt) > 0:
             string += f" {self.quarter_sym_opt}"
-        string += "\n"
-        for row in assembly_map:
+        string = write_line(prefix, string, self.comments.get(None))
+        for i, row in enumerate(assembly_map, start=first_row):
             assemblies = [assembly_mpact_ids[assembly] if assembly is not None else "" for assembly in row]
-            string += prefix + f"  {list_to_str(assemblies, id_length).rstrip()}\n"
+            string += write_line(prefix + "  ", list_to_str(assemblies, id_length).rstrip(), self.comments.get(i))
         return string
 
 
     def _trim_empty_boundary(self,
                              assembly_map: List[List[Optional[Assembly]]]
-    ) -> List[List[Optional[Assembly]]]:
+    ) -> Tuple[List[List[Optional[Assembly]]], int]:
         """Trim all-empty boundary rows and columns from an assembly map.
 
         Parameters
@@ -303,12 +318,16 @@ class Core():  # pylint: disable=too-many-public-methods
         list of list of Assembly or None
             Rectangular assembly map with leading and trailing all-empty rows
             and columns removed.
+        int
+            The index in ``assembly_map`` of the first row kept
         """
 
         trimmed_map = [list(row) for row in assembly_map]
+        first_row   = 0
 
         while trimmed_map and all(assembly is None for assembly in trimmed_map[0]):
             trimmed_map = trimmed_map[1:]
+            first_row  += 1
 
         while trimmed_map and all(assembly is None for assembly in trimmed_map[-1]):
             trimmed_map = trimmed_map[:-1]
@@ -325,7 +344,7 @@ class Core():  # pylint: disable=too-many-public-methods
         if not trimmed_map[0]:
             raise ValueError("MPACT core card cannot be empty.")
 
-        return trimmed_map
+        return trimmed_map, first_row
 
     def _assemblies_have_same_axial_meshing(self)->bool:
         """ A helper method for checking if all assemblies have the same axial axial meshing along their lengths
