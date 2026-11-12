@@ -1,4 +1,5 @@
-from typing import List, Union, TypeVar, Callable, Any, Literal, Optional, Sequence
+from __future__ import annotations
+from typing import List, Union, TypeVar, Callable, Any, Literal, Optional, Sequence, Collection, Dict, TYPE_CHECKING
 from collections.abc import Hashable
 from decimal import Decimal, ROUND_HALF_UP
 import math
@@ -10,6 +11,9 @@ import pickle
 
 import numpy as np
 import openmc
+
+if TYPE_CHECKING:
+    from mpactpy.material import Material
 
 # The relative tolerance for rounding floating point numbers
 ROUNDING_RELATIVE_TOLERANCE = 1E-5
@@ -313,6 +317,49 @@ def unique_instances(elements: List[T]) -> List[T]:
         The list of unique instances
     """
     return list({id(element): element for element in elements}.values())
+
+
+def build_material_sharing_map(materials: Collection[Material],
+                               share: Optional[Dict[Material, Material]] = None,
+                               exclude: Optional[Collection[Material]] = None,
+                               keep: Optional[Collection[Material]] = None) -> Dict[int, Material]:
+    """Map material instance IDs to preserved or shared material instances.
+
+    Parameters
+    ----------
+    materials : Collection[Material]
+        Material instances to map. For equal materials without an existing
+        representative in share, the first eligible instance encountered becomes
+        the representative.
+    share : Optional[Dict[Material, Material]]
+        Representatives keyed by equivalent materials. Materials not kept or
+        excluded are added in place when no equivalent key exists. If omitted,
+        a new mapping is used.
+    exclude : Optional[Collection[Material]]
+        Materials matched by equality whose instances retain themselves, even if
+        an equivalent representative exists in share. Defaults to no exclusions.
+    keep : Optional[Collection[Material]]
+        Material objects matched by identity that retain themselves. These
+        instances are included in the result even if absent from materials.
+        Equal but distinct objects remain eligible for sharing unless excluded.
+        Defaults to keeping none.
+
+    Returns
+    -------
+    Dict[int, Material]
+        Replacement material keyed by the id() of each input or kept instance.
+        Preserved instances map to themselves; other instances map to the
+        representative selected through share.
+    """
+    if share is None:
+        share = {}
+    exclude = exclude or ()
+    replacements = {id(material): material for material in keep or ()}
+    for material in materials:
+        key = id(material)
+        if key not in replacements:
+            replacements[key] = material if material in exclude else share.setdefault(material, material)
+    return replacements
 
 
 def is_rectangular(map_2D: List[List[T]]) -> bool:

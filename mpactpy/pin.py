@@ -9,7 +9,8 @@ import openmc
 from mpactpy.material import Material
 from mpactpy.comments import Comments, write_line, assert_keys_written
 from mpactpy.pinmesh import PinMesh, RectangularPinMesh, GeneralCylindricalPinMesh
-from mpactpy.utils import list_to_str, unique_instances, equal_thickness_ndivs, equal_arc_length_ndivs
+from mpactpy.utils import list_to_str, unique_instances, equal_thickness_ndivs, equal_arc_length_ndivs, \
+                          build_material_sharing_map
 
 
 class Pin():
@@ -370,14 +371,12 @@ class Pin():
             The rebuilt Pin
         """
 
-        if share is None:
-            share = {}
+        replacements = build_material_sharing_map(self.materials, share, exclude, keep)
+        return self._with_materials(replacements)
 
-        exclude = exclude or []
-        keep_ids = {id(material) for material in keep} if keep is not None else set()
-        return Pin(self.pinmesh, [material if id(material) in keep_ids or material in exclude
-                                  else share.setdefault(material, material)
-                                  for material in self.materials])
+    def _with_materials(self, replacements: Dict[int, Material]) -> Pin:
+        """Rebuild this pin using the resolved material-instance mapping."""
+        return Pin(self.pinmesh, [replacements[id(material)] for material in self.materials])
 
 
 

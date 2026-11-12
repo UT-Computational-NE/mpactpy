@@ -9,7 +9,7 @@ from mpactpy.module import Module
 from mpactpy.pin import Pin
 from mpactpy.material import Material
 from mpactpy.comments import Comments, write_line, assert_keys_written
-from mpactpy.utils import list_to_str, unique_instances, unique, process_parallel_work
+from mpactpy.utils import list_to_str, unique_instances, unique, process_parallel_work, build_material_sharing_map
 
 
 class Assembly():
@@ -369,10 +369,14 @@ class Assembly():
             The rebuilt Assembly
         """
 
-        if share is None:
-            share = {}
+        replacements = build_material_sharing_map(self.materials, share, exclude, keep)
+        return self._with_materials(replacements)
 
-        return Assembly([lattice.with_shared_materials(share, exclude, keep) for lattice in self.lattice_map])
+    def _with_materials(self, replacements: Dict[int, Material]) -> Assembly:
+        """Rebuild this assembly's lattices using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
+        return Assembly([lattice._with_materials(replacements) for lattice in self.lattice_map])
 
     @staticmethod
     def _process_lattice_chunk(lattice_chunk, geometry, child_policy, material_cache):

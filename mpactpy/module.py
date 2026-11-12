@@ -7,7 +7,8 @@ import openmc
 from mpactpy.pin import Pin, PinMesh
 from mpactpy.comments import Comments, write_line, assert_keys_written
 from mpactpy.material import Material
-from mpactpy.utils import list_to_str, unique_instances, is_rectangular, unique, process_parallel_work
+from mpactpy.utils import list_to_str, unique_instances, is_rectangular, unique, process_parallel_work, \
+                          build_material_sharing_map
 
 
 class Module():
@@ -359,10 +360,14 @@ class Module():
             The rebuilt Module
         """
 
-        if share is None:
-            share = {}
+        replacements = build_material_sharing_map(self.materials, share, exclude, keep)
+        return self._with_materials(replacements)
 
-        return Module(self.nz, [[pin.with_shared_materials(share, exclude, keep) for pin in row] for row in self.pin_map])
+    def _with_materials(self, replacements: Dict[int, Material]) -> Module:
+        """Rebuild this module's pins using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
+        return Module(self.nz, [[pin._with_materials(replacements) for pin in row] for row in self.pin_map])
 
     @staticmethod
     def _process_pin_chunk(pin_chunk, geometry, child_policy, material_cache):

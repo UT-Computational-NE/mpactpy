@@ -12,6 +12,7 @@ from mpactpy.comments import Comments, write_line, drop_inline, assert_keys_writ
 from mpactpy.utils import atomic_mass, AVOGADRO, ROOM_TEMPERATURE, \
                           relative_round, ROUNDING_RELATIVE_TOLERANCE as TOL
 
+
 class Material():
     """ Class for specifying materials of an MPACT model
 
