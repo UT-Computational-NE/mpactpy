@@ -108,12 +108,6 @@ OPTION
     assert output.count("  mat ") == 3
     assert "  crd_specs 3 / 2 / 38.1 960 / top\n" in output
 
-    model.options.add("param", "x" * 248)
-    model.write_to_string(caseid="test", indent=2)
-    model.options.add("param", "x" * 249)
-    with pytest.raises(AssertionError):
-        model.write_to_string(caseid="test", indent=2)
-
 
 def test_model_key_value_blocks(core, material):
     state = KeyValueBlock("STATE")

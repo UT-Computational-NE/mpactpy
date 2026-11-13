@@ -8,7 +8,8 @@ from mpactpy.lattice import PinMesh, Lattice
 from mpactpy.module import Module
 from mpactpy.pin import Pin
 from mpactpy.material import Material
-from mpactpy.utils import list_to_str, unique_instances, unique, process_parallel_work
+from mpactpy.comments import Comments, write_line, assert_keys_written
+from mpactpy.utils import list_to_str, unique_instances, unique, process_parallel_work, build_material_sharing_map
 
 
 class Assembly():
@@ -18,6 +19,9 @@ class Assembly():
     ----------
     lattice_map : List[Lattice]
         1-D array of lattice names
+    comments : Dict[Optional[int], Comments]
+        The comments of each line of the `assembly` card
+        (key: None for the `assembly` line, 0 for the line of lattices)
 
     Attributes
     ----------
@@ -41,6 +45,9 @@ class Assembly():
         The unique pinmeshes contained in this assembly
     materials : List[Material]
         The unique materials contained in this assembly
+    comments : Dict[Optional[int], Comments]
+        The comments of each line of the `assembly` card
+        (key: None for the `assembly` line, 0 for the line of lattices)
     """
 
     class Pitch(TypedDict):
@@ -96,14 +103,19 @@ class Assembly():
     def materials(self) -> List[Material]:
         return self._materials
 
+    @property
+    def comments(self) -> Dict[Optional[int], Comments]:
+        return self._comments
 
-    def __init__(self, lattice_map: List[Lattice]):
+
+    def __init__(self, lattice_map: List[Lattice], comments: Dict[Optional[int], Comments] = None):
 
         self._cached_hash = None
 
         assert len(lattice_map) > 0
 
         self._lattice_map = lattice_map
+        self._comments    = dict(comments) if comments else {}
 
         assert all(isclose(lattice.mod_dim['X'], self.lattice_map[0].mod_dim['X']) for lattice in self.lattice_map)
         assert all(isclose(lattice.mod_dim['Y'], self.lattice_map[0].mod_dim['Y']) for lattice in self.lattice_map)
@@ -167,15 +179,17 @@ class Assembly():
             The string that represents the
         """
 
+        assert_keys_written(self.comments, [0])
+
         if lattice_mpact_ids is None:
             lattice = unique(lattice for lattice in self.lattice_map)
             lattice_mpact_ids = {lattice: i+1 for i, lattice in enumerate(lattice)}
 
         assembly_id = 1 if assembly_mpact_ids is None else assembly_mpact_ids[self]
 
-        string = prefix + f"assembly {assembly_id}\n"
+        string = write_line(prefix, f"assembly {assembly_id}", self.comments.get(None))
         lattices = [lattice_mpact_ids[lattice] for lattice in self.lattice_map]
-        string += prefix + prefix + f"{list_to_str(lattices)}\n"
+        string += write_line(prefix + prefix, list_to_str(lattices), self.comments.get(0))
         return string
 
 
@@ -355,10 +369,14 @@ class Assembly():
             The rebuilt Assembly
         """
 
-        if share is None:
-            share = {}
+        replacements = build_material_sharing_map(self.materials, share, exclude, keep)
+        return self._with_materials(replacements)
 
-        return Assembly([lattice.with_shared_materials(share, exclude, keep) for lattice in self.lattice_map])
+    def _with_materials(self, replacements: Dict[int, Material]) -> Assembly:
+        """Rebuild this assembly's lattices using the resolved material-instance mapping."""
+        # Child rebuilding methods are internal to this hierarchy traversal.
+        # pylint: disable-next=protected-access
+        return Assembly([lattice._with_materials(replacements) for lattice in self.lattice_map])
 
     @staticmethod
     def _process_lattice_chunk(lattice_chunk, geometry, child_policy, material_cache):
