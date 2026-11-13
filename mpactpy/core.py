@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict, Collection
+from typing import List, Any, Literal, Dict, Tuple, Optional, TypedDict, Collection, get_args
 from math import isclose
 from itertools import accumulate
+from dataclasses import dataclass, replace
 
 import openmc
 
@@ -12,8 +13,8 @@ from mpactpy.module import Module
 from mpactpy.lattice import Lattice
 from mpactpy.assembly import Assembly
 from mpactpy.comments import Comments, write_line, assert_keys_written
-from mpactpy.utils import list_to_str, unique_instances, is_rectangular, unique, process_parallel_work, \
-                          build_material_sharing_map
+from mpactpy.utils import list_to_str, num_to_str, relative_round, unique_instances, is_rectangular, unique, \
+                          process_parallel_work, build_material_sharing_map, ROUNDING_RELATIVE_TOLERANCE as TOL
 
 
 class Core():  # pylint: disable=too-many-public-methods
@@ -37,6 +38,11 @@ class Core():  # pylint: disable=too-many-public-methods
     comments : Dict[Optional[int], Comments]
         The comments of each line of the `core` card
         (key: None for the `core` line, else the `assembly_map` row index)
+    crd_bank : Optional[List[List[Optional[str]]]]
+        2-D map of the control bank labels, the same shape as assembly_map
+        (None where there is no control rod)
+    crd_specs : Optional[CrdSpecs]
+        The control rod specifications
 
     Attributes
     ----------
@@ -80,6 +86,10 @@ class Core():  # pylint: disable=too-many-public-methods
         The comments of each line of the `core` card
         (key: None for the `core` line, else the `assembly_map` row index).
         Rows that are all empty at the edges of the map are not written and take no comments.
+    crd_bank : Optional[List[List[Optional[str]]]]
+        2-D map of the control bank labels
+    crd_specs : Optional[CrdSpecs]
+        The control rod specifications
     """
 
     SymmetryOption = Literal["360", "90", ""]
@@ -96,6 +106,89 @@ class Core():  # pylint: disable=too-many-public-methods
         """
         row:    List[float]
         column: List[float]
+
+    Withdraw = Literal["top", "bottom"]
+
+    @dataclass(frozen=True, eq=False)
+    class CrdSpecs():
+        """ A dataclass for the control rod specifications
+
+        Materials are compared by instance, because each instance is written as its own material.
+
+        Attributes
+        ----------
+        control_materials : List[Material]
+            The control materials
+        swap_material : Material
+            The material that replaces the control materials when a control rod is withdrawn
+        travel_distance : float
+            The total travel distance of the control rods (cm)
+        max_steps : int
+            The number of steps at the fully withdrawn position
+        withdraw : Optional[Withdraw]
+            Whether the control rods are withdrawn from the top or the bottom of the model
+
+        References
+        ----------
+        [1] "MPACT Native Input User's Manual", Version 4.4
+            Section 4.3.11 pg 21
+        """
+
+        control_materials: List[Material]
+        swap_material:     Material
+        travel_distance:   float
+        max_steps:         int
+        withdraw:          Optional[Core.Withdraw] = None
+
+        def __post_init__(self):
+            withdraw_options = get_args(Core.Withdraw) + (None,)
+            assert len(self.control_materials) > 0,   "len(control_materials) = 0, expected > 0"
+            assert self.travel_distance > 0.,         f"travel_distance = {self.travel_distance}, expected > 0"
+            assert self.max_steps > 0,                f"max_steps = {self.max_steps}, expected > 0"
+            assert self.withdraw in withdraw_options, f"withdraw = {self.withdraw}, expected one of {withdraw_options}"
+
+        @property
+        def materials(self) -> List[Material]:
+            return self.control_materials + [self.swap_material]
+
+        def __eq__(self, other: Any) -> bool:
+            if self is other:
+                return True
+            return (isinstance(other, Core.CrdSpecs)                                    and
+                    list(map(id, self.materials)) == list(map(id, other.materials))     and
+                    isclose(self.travel_distance, other.travel_distance, rel_tol=TOL)   and
+                    self.max_steps == other.max_steps                                   and
+                    self.withdraw  == other.withdraw
+                   )
+
+        def __hash__(self) -> int:
+            return hash((tuple(map(id, self.materials)),
+                         relative_round(self.travel_distance, TOL),
+                         self.max_steps,
+                         self.withdraw))
+
+        def write_to_string(self, prefix: str, material_mpact_ids: Dict[int, int]) -> str:
+            """ Method for writing the control rod specifications to a string
+
+            Parameters
+            ----------
+            prefix : str
+                A prefix with which to start the written output string
+            material_mpact_ids : Dict[int, int]
+                The MPACT IDs of the Materials, keyed by the id() of each Material
+
+            Returns
+            -------
+            str
+                The string that represents the control rod specifications
+            """
+
+            string = prefix + f"crd_specs {list_to_str([material_mpact_ids[id(m)] for m in self.control_materials])}" + \
+                              f" / {material_mpact_ids[id(self.swap_material)]}" + \
+                              f" / {num_to_str(self.travel_distance)} {self.max_steps}"
+            if self.withdraw is not None:
+                string += f" / {self.withdraw}"
+            return string + "\n"
 
     @property
     def symmetry_opt(self) -> SymmetryOption:
@@ -165,13 +258,23 @@ class Core():  # pylint: disable=too-many-public-methods
     def comments(self) -> Dict[Optional[int], Comments]:
         return self._comments
 
+    @property
+    def crd_bank(self) -> Optional[List[List[Optional[str]]]]:
+        return self._crd_bank
+
+    @property
+    def crd_specs(self) -> Optional[CrdSpecs]:
+        return self._crd_specs
+
 
     def __init__(self,
                  assembly_map: List[List[Assembly]],
                  symmetry_opt: SymmetryOption = "",
                  quarter_sym_opt: QuarterSymmetryOption = "",
                  min_thickness: float = 0.,
-                 comments: Dict[Optional[int], Comments] = None):
+                 comments: Dict[Optional[int], Comments] = None,
+                 crd_bank: Optional[List[List[Optional[str]]]] = None,
+                 crd_specs: Optional[CrdSpecs] = None):
 
         self._cached_hash = None
 
@@ -181,6 +284,11 @@ class Core():  # pylint: disable=too-many-public-methods
         self._quarter_sym_opt = quarter_sym_opt
         self._assembly_map    = assembly_map
         self._comments        = dict(comments) if comments else {}
+        self._crd_bank        = crd_bank
+        self._crd_specs       = crd_specs
+
+        assert crd_bank is None or (len(crd_bank) == self.ny and all(len(row) == self.nx for row in crd_bank)), \
+            f"crd_bank shape = {[len(row) for row in crd_bank]}, expected the assembly_map shape"
 
         self._assemblies = unique(assembly for row in self.assembly_map for assembly in row if assembly)
 
@@ -206,7 +314,8 @@ class Core():  # pylint: disable=too-many-public-methods
         self._modules    = unique(module for lattice in self.lattices for row in lattice.module_map for module in row)
         self._pins       = unique(pin for module in self.modules for row in module.pin_map for pin in row)
         self._pinmeshes  = unique(pin.pinmesh for pin in self.pins)
-        self._materials  = unique_instances(material for pin in self.pins for material in pin.materials)
+        self._materials  = unique_instances([material for pin in self.pins for material in pin.materials] +
+                                            (crd_specs.materials if crd_specs else []))
 
     def with_shared_materials(self, share: Optional[Dict[Material, Material]] = None,
                               exclude: Optional[Collection[Material]] = None,
@@ -236,11 +345,17 @@ class Core():  # pylint: disable=too-many-public-methods
         return self._with_materials(replacements)
 
     def _with_materials(self, replacements: Dict[int, Material]) -> Core:
-        """Rebuild this core's assemblies using the resolved material-instance mapping."""
+        """Rebuild this core's assemblies and control rods using the resolved material-instance mapping."""
+        crd_specs = self.crd_specs
+        if crd_specs:
+            crd_specs = replace(crd_specs,
+                                control_materials = [replacements[id(material)] for material in crd_specs.control_materials],
+                                swap_material     = replacements[id(crd_specs.swap_material)])
         # Child rebuilding methods are internal to this hierarchy traversal.
         # pylint: disable-next=protected-access
         return Core([[assembly._with_materials(replacements) if assembly else None for assembly in row]
-                     for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt)
+                     for row in self.assembly_map], self.symmetry_opt, self.quarter_sym_opt,
+                    crd_bank=self.crd_bank, crd_specs=crd_specs)
 
     def __eq__(self, other: Any) -> bool:
         if self is other:
@@ -248,14 +363,18 @@ class Core():  # pylint: disable=too-many-public-methods
         return (isinstance(other, Core)                       and
                 self.symmetry_opt    == other.symmetry_opt    and
                 self.quarter_sym_opt == other.quarter_sym_opt and
-                self.assembly_map    == other.assembly_map
+                self.assembly_map    == other.assembly_map    and
+                self.crd_bank        == other.crd_bank        and
+                self.crd_specs       == other.crd_specs
                )
 
     def __hash__(self) -> int:
         if self._cached_hash is None:
             self._cached_hash = hash((self.symmetry_opt,
                                       self.quarter_sym_opt,
-                                      tuple(tuple(row) for row in self.assembly_map)))
+                                      tuple(tuple(row) for row in self.assembly_map),
+                                      None if self.crd_bank is None else tuple(tuple(row) for row in self.crd_bank),
+                                      self.crd_specs))
         return self._cached_hash
 
     def __getstate__(self) -> Dict[str, Any]:
@@ -264,7 +383,8 @@ class Core():  # pylint: disable=too-many-public-methods
 
     def write_to_string(self,
                         prefix: str = "",
-                        assembly_mpact_ids = Dict[Assembly, int]) -> str:
+                        assembly_mpact_ids = Dict[Assembly, int],
+                        material_mpact_ids: Optional[Dict[int, int]] = None) -> str:
         """ Method for writing a to a string
 
         Parameter
@@ -273,6 +393,8 @@ class Core():  # pylint: disable=too-many-public-methods
             A prefix with which to start each line of the written output string
         assembly_mpact_ids : Dict[Lattice, int]
             A collection of Assemblies and their corresponding MPACT IDs
+        material_mpact_ids : Optional[Dict[int, int]]
+            The MPACT IDs of the Materials, keyed by the id() of each Material
 
         Returns
         -------
@@ -299,52 +421,46 @@ class Core():  # pylint: disable=too-many-public-methods
         for i, row in enumerate(assembly_map, start=first_row):
             assemblies = [assembly_mpact_ids[assembly] if assembly is not None else "" for assembly in row]
             string += write_line(prefix + "  ", list_to_str(assemblies, id_length).rstrip(), self.comments.get(i))
+
+        if self.crd_bank is not None:
+            crd_bank, _  = self._trim_empty_boundary(self.crd_bank)
+            label_length = max((len(label) for row in crd_bank for label in row if label is not None), default=1)
+            string += prefix + "crd_bank\n"
+            for labels, assemblies in zip(crd_bank, assembly_map):
+                labels = ["" if assembly is None else label if label is not None else "-"
+                          for label, assembly in zip(labels, assemblies)]
+                string += prefix + f"  {list_to_str(labels, label_length).rstrip()}\n"
+
+        if self.crd_specs is not None:
+            if material_mpact_ids is None:
+                material_mpact_ids = {id(material): i+1 for i, material in enumerate(self.materials)}
+            string += self.crd_specs.write_to_string(prefix, material_mpact_ids)
         return string
 
 
-    def _trim_empty_boundary(self,
-                             assembly_map: List[List[Optional[Assembly]]]
-    ) -> Tuple[List[List[Optional[Assembly]]], int]:
-        """Trim all-empty boundary rows and columns from an assembly map.
+    def _trim_empty_boundary(self, core_map: List[List[Any]]) -> Tuple[List[List[Any]], int]:
+        """Trim the assembly map's all-empty boundary rows and columns from a core map.
 
         Parameters
         ----------
-        assembly_map : list of list of Assembly or None
-            Rectangular assembly map to trim. Entries with ``None`` represent
-            empty core-map positions.
+        core_map : list of list
+            Map with the same shape as the assembly map (e.g. the assembly map or crd_bank)
 
         Returns
         -------
-        list of list of Assembly or None
-            Rectangular assembly map with leading and trailing all-empty rows
-            and columns removed.
+        list of list
+            The map without the rows and columns that are all empty in the assembly map
         int
-            The index in ``assembly_map`` of the first row kept
+            The index in ``core_map`` of the first row kept
         """
 
-        trimmed_map = [list(row) for row in assembly_map]
-        first_row   = 0
+        rows = [i for i, row in enumerate(self.assembly_map) if any(assembly is not None for assembly in row)]
+        cols = [j for j in range(self.nx) if any(row[j] is not None for row in self.assembly_map)]
 
-        while trimmed_map and all(assembly is None for assembly in trimmed_map[0]):
-            trimmed_map = trimmed_map[1:]
-            first_row  += 1
-
-        while trimmed_map and all(assembly is None for assembly in trimmed_map[-1]):
-            trimmed_map = trimmed_map[:-1]
-
-        if not trimmed_map:
+        if not rows:
             raise ValueError("MPACT core card cannot be empty.")
 
-        while trimmed_map[0] and all(row[0] is None for row in trimmed_map):
-            trimmed_map = [row[1:] for row in trimmed_map]
-
-        while trimmed_map[0] and all(row[-1] is None for row in trimmed_map):
-            trimmed_map = [row[:-1] for row in trimmed_map]
-
-        if not trimmed_map[0]:
-            raise ValueError("MPACT core card cannot be empty.")
-
-        return trimmed_map, first_row
+        return [row[cols[0]:cols[-1]+1] for row in core_map[rows[0]:rows[-1]+1]], rows[0]
 
     def _assemblies_have_same_axial_meshing(self)->bool:
         """ A helper method for checking if all assemblies have the same axial axial meshing along their lengths
