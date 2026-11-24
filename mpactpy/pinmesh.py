@@ -319,6 +319,8 @@ class PinMesh(ABC):
             True if the mesh type, stored transverse coordinates, and transverse
             subdivisions match.
         """
+        # Both meshes use the same internal PinMesh comparison hook.
+        # pylint: disable-next=protected-access
         return isinstance(other, PinMesh) and self._cross_section_key() == other._cross_section_key()
 
     @abstractmethod
