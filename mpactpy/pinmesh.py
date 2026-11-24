@@ -1219,21 +1219,13 @@ class GeneralCylindricalPinMesh(PinMesh):
 
     def _set_regions_inside_bounds(self) -> None:
 
-        corners = [hypot(self.xMin, self.yMin), hypot(self.xMin, self.yMax),
-                   hypot(self.xMax, self.yMin), hypot(self.xMax, self.yMax)]
-
-        def circle_encloses_box(r):
-            return all(corner < r for corner in corners)
-
-        def box_overlaps_circle(r):
-            return  not(all(r < corner or isclose(r, corner) for corner in corners) and
-                       (self.xMin > 0.0 and self.yMin > 0.0 or
-                        self.xMin > 0.0 and self.yMax < 0.0 or
-                        self.xMax < 0.0 and self.yMin > 0.0 or
-                        self.xMin > 0.0 and self.yMax < 0.0))
-
-        radii_inside_bounds = [i for i,r in enumerate(self.r)
-                               if box_overlaps_circle(r) and not circle_encloses_box(r)]
+        closest_x = max(self.xMin, -self.xMax, 0.0)
+        closest_y = max(self.yMin, -self.yMax, 0.0)
+        closest_distance = hypot(closest_x, closest_y)
+        farthest_distance = hypot(max(abs(self.xMin), abs(self.xMax)),
+                                  max(abs(self.yMin), abs(self.yMax)))
+        radii_inside_bounds = [index for index, radius in enumerate(self.r)
+                               if closest_distance < radius < farthest_distance]
 
         if not radii_inside_bounds:
             self._r_inside_bounds = []
