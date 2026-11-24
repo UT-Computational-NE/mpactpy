@@ -232,7 +232,7 @@ def allclose(rhs:  List[Union[float, int]],
 
 def num_to_str(num:          Union[float, int],
                print_length: int = None,
-               rel_tol:      float = ROUNDING_RELATIVE_TOLERANCE) -> str:
+               rel_tol:      Optional[float] = ROUNDING_RELATIVE_TOLERANCE) -> str:
     """Convert a numerical value to a canonical MPACT input string.
 
     Floating point values are rounded before writing so values that are equal
@@ -244,8 +244,8 @@ def num_to_str(num:          Union[float, int],
         The number to convert to a string.
     print_length : int
         The print spacing for the string.
-    rel_tol : float
-        The relative tolerance for rounding floating point values.
+    rel_tol : Optional[float]
+        The relative tolerance for rounding floats. Use None for stored values.
 
     Returns
     -------
@@ -253,7 +253,7 @@ def num_to_str(num:          Union[float, int],
         The number as a string.
     """
 
-    if isinstance(num, float):
+    if isinstance(num, float) and rel_tol is not None:
         num = relative_round(num, rel_tol)
         if math.isclose(num, round(num)):
             return f"{num:.1f}" if print_length is None else f"{num:{print_length}.1f}"
@@ -263,7 +263,7 @@ def num_to_str(num:          Union[float, int],
 
 def list_to_str(input_list:   List[Union[float, int]],
                 print_length: int = None,
-                rel_tol:      float = ROUNDING_RELATIVE_TOLERANCE) -> str:
+                rel_tol:      Optional[float] = ROUNDING_RELATIVE_TOLERANCE) -> str:
     """ Converts a list of numerical values to an equally spaced string
 
     Parameters
@@ -272,8 +272,8 @@ def list_to_str(input_list:   List[Union[float, int]],
         The list to be converted to a string
     print_length : int
         The print spacing for the string
-    rel_tol : float
-        The relative tolerance for rounding floating point values.
+    rel_tol : Optional[float]
+        The relative tolerance for rounding floats. Use None for stored values.
 
     Returns
     -------

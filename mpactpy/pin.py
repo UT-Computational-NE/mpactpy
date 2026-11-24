@@ -10,7 +10,7 @@ from mpactpy.material import Material
 from mpactpy.comments import Comments, write_line, assert_keys_written
 from mpactpy.pinmesh import PinMesh, RectangularPinMesh, GeneralCylindricalPinMesh
 from mpactpy.utils import list_to_str, unique_instances, equal_thickness_ndivs, equal_arc_length_ndivs, \
-                          build_material_sharing_map
+                          build_material_sharing_map, ROUNDING_RELATIVE_TOLERANCE as TOL
 
 
 class Pin():
@@ -191,6 +191,8 @@ class Pin():
     def axial_merge(self, pin: Pin) -> Pin:
         """ Method for axially merging a pin with this pin
 
+        The merged axial mesh uses this pin's rounding tolerance.
+
         Parameters
         ----------
         pin : Pin
@@ -202,11 +204,11 @@ class Pin():
             The new combined pin
         """
 
+        assert self.pinmesh.radial_mesh_equals(pin.pinmesh), \
+            "Pin meshes of the two pins must have the same radial specifications"
+
         pinmesh_template = deepcopy(self.pinmesh)
         pinmesh_template.comments.clear()
-        pinmesh_template.set_axial_mesh(pin.pinmesh.zvals, pin.pinmesh.ndivz)
-
-        assert pin.pinmesh == pinmesh_template, "Pin meshes of the two pins must have the same radial specifications"
 
         zvals  = self.pinmesh.zvals[:]
         zvals += [zval + zvals[-1] for zval in pin.pinmesh.zvals]
@@ -383,7 +385,8 @@ class Pin():
 
 def build_rec_pin(thicknesses:             Dict[str, List[float]],
                   materials:               List[Material],
-                  target_cell_thicknesses: Optional[Dict[str, float]] = None) -> Pin:
+                  target_cell_thicknesses: Optional[Dict[str, float]] = None,
+                  *, rounding_rel_tol: float = TOL) -> Pin:
     """ Factory for building Rectangular Mesh Pins
 
     This factory, unlike construction via the "normal means" using
@@ -401,6 +404,8 @@ def build_rec_pin(thicknesses:             Dict[str, List[float]],
     target_cell_thicknesses : Optional[Dict[str, float]]
         The target side length of the cells (cm).  Defaults to infinity for dimensions where no targets provided.
         (keys: "X", "Y", "Z")
+    rounding_rel_tol : float
+        Relative tolerance used to round pin mesh coordinates.
 
     Returns
     -------
@@ -418,7 +423,8 @@ def build_rec_pin(thicknesses:             Dict[str, List[float]],
 
     ndiv = {axis: equal_thickness_ndivs(thicknesses[axis], target_cell_thicknesses[axis]) for axis in ["X", "Y", "Z"]}
     vals = {axis: list(accumulate(thicknesses[axis])) for axis in ["X", "Y", "Z"]}
-    mesh  = RectangularPinMesh(vals["X"], vals["Y"], vals["Z"], ndiv["X"], ndiv["Y"], ndiv["Z"])
+    mesh  = RectangularPinMesh(vals["X"], vals["Y"], vals["Z"], ndiv["X"], ndiv["Y"], ndiv["Z"],
+                               rounding_rel_tol=rounding_rel_tol)
     return Pin(mesh, materials)
 
 
@@ -426,7 +432,8 @@ def build_rec_pin(thicknesses:             Dict[str, List[float]],
 def build_gcyl_pin(bounds:                  Tuple[float, float, float, float],
                    thicknesses:             Dict[str, List[float]],
                    materials:               List[Material],
-                   target_cell_thicknesses: Optional[Dict[str, float]] = None) -> Pin:
+                   target_cell_thicknesses: Optional[Dict[str, float]] = None,
+                   *, rounding_rel_tol: float = TOL) -> Pin:
     """ Factory for building General Cylindrical Mesh Pins
 
     This factory, unlike construction via the "normal means" using
@@ -450,6 +457,8 @@ def build_gcyl_pin(bounds:                  Tuple[float, float, float, float],
     target_cell_thicknesses : Optional[Dict[str, float]]
         The target side length of the cells (cm). Defaults to infinity for dimensions where no targets provided.
         (keys: "R", "S", "Z")
+    rounding_rel_tol : float
+        Relative tolerance used to round pin mesh coordinates.
 
     Returns
     -------
@@ -484,7 +493,8 @@ def build_gcyl_pin(bounds:                  Tuple[float, float, float, float],
     ndivz = equal_thickness_ndivs(thicknesses["Z"], target_cell_thicknesses["Z"])
     zvals = list(accumulate(thicknesses["Z"]))
 
-    mesh = GeneralCylindricalPinMesh(r, xmin, xmax, ymin, ymax, zvals, ndivr, ndiva, ndivz)
+    mesh = GeneralCylindricalPinMesh(r, xmin, xmax, ymin, ymax, zvals, ndivr, ndiva, ndivz,
+                                     rounding_rel_tol=rounding_rel_tol)
     pin = Pin(mesh, materials)
 
     subd_r = equal_thickness_ndivs(thicknesses["R"], target_cell_thicknesses["R"])

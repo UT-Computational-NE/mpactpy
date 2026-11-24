@@ -1,8 +1,9 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Dict, List, Any, Tuple, Optional
-from math import isclose, hypot
+from math import isclose, hypot, isfinite, remainder, ulp
 from concurrent.futures import ProcessPoolExecutor
 import tempfile
 import os
@@ -14,7 +15,7 @@ import numpy as np
 
 from mpactpy.material import Material
 from mpactpy.comments import Comments, write_line, drop_inline, assert_keys_written
-from mpactpy.utils import relative_round, allclose, list_to_str, ROUNDING_RELATIVE_TOLERANCE as TOL, \
+from mpactpy.utils import relative_round, list_to_str, ROUNDING_RELATIVE_TOLERANCE as TOL, \
                           temporary_environment, equal_thickness_regions, RadialDivisionType, subdivide_ring
 
 
@@ -250,6 +251,8 @@ class PinMesh(ABC):
         dividing the grid defined by zval
     pitch : Dict[str, float]
         The pitch of the pin mesh in each axis direction (keys: 'X', 'Y', 'Z')
+    rounding_rel_tol : float
+        Relative tolerance used to round geometry when creating or updating the mesh.
     regions_inside_bounds = List[int]
         The list of material regions that lie within the bounds of the pinmesh
     comments : Dict[Optional[int], Comments]
@@ -263,10 +266,20 @@ class PinMesh(ABC):
     _regions_inside_bounds: List[int]
     _cached_hash: Optional[int]
     _comments: Dict[Optional[int], Comments]
+    _rounding_rel_tol: float = TOL
 
     class Subdivisions(ABC):
         """Base class for pinmesh-specific material-region subdivision specifications.
         """
+
+    def __init__(self, *, rounding_rel_tol: float = TOL):
+        if not isfinite(rounding_rel_tol) or rounding_rel_tol <= 0.0:
+            raise ValueError("rounding_rel_tol must be finite and positive")
+        self._rounding_rel_tol = rounding_rel_tol
+
+    @property
+    def rounding_rel_tol(self) -> float:
+        return self._rounding_rel_tol
 
     @property
     def number_of_material_regions(self) -> int:
@@ -291,6 +304,31 @@ class PinMesh(ABC):
     @property
     def comments(self) -> Dict[Optional[int], Comments]:
         return self._comments
+
+    def radial_mesh_equals(self, other: PinMesh) -> bool:
+        """Compare two pin meshes in the plane perpendicular to the Z axis.
+
+        Parameters
+        ----------
+        other : PinMesh
+            The pin mesh to compare with this one.
+
+        Returns
+        -------
+        bool
+            True if the mesh type, stored transverse coordinates, and transverse
+            subdivisions match.
+        """
+        # Both meshes use the same internal PinMesh comparison hook.
+        # pylint: disable-next=protected-access
+        return isinstance(other, PinMesh) and self._cross_section_key() == other._cross_section_key()
+
+    @abstractmethod
+    def _cross_section_key(self) -> tuple:
+        """Return the mesh type and transverse geometry used for equality."""
+
+    def _geometry_key(self) -> tuple:
+        return self._cross_section_key(), tuple(self.zvals), tuple(self.ndivz)
 
     @abstractmethod
     def write_to_string(self, prefix: str = "", mpact_ids: Dict[PinMesh, int] = None) -> str:
@@ -364,13 +402,19 @@ class PinMesh(ABC):
         assert (len(ndivz) == len(zvals)), f"len(ndivz) = {len(ndivz)}, len(zvals) = {len(zvals)}"
         assert all(val > 0 for val in ndivz), f"ndivz = {ndivz}"
 
-        self._zvals = zvals
+        self._zvals = self._round_interfaces(zvals, 'Z')
         self._ndivz = ndivz
 
         self._set_pitch()
         self._set_number_of_material_regions()
         self._set_regions_inside_bounds()
         self._cached_hash = None
+
+    def _round_interfaces(self, values: List[float], axis: str) -> List[float]:
+        rounded = [relative_round(float(value), self.rounding_rel_tol) for value in values]
+        if rounded[0] <= 0.0 or any(left >= right for left, right in zip(rounded, rounded[1:])):
+            raise ValueError(f"Rounding collapses {axis} mesh interfaces at tolerance {self.rounding_rel_tol}: {values}")
+        return rounded
 
     def __getstate__(self) -> Dict[str, Any]:
         # String hashes differ between processes, so a cached hash must not be pickled
@@ -522,6 +566,9 @@ class RectangularPinMesh(PinMesh):
         dividing the grid defined by zval
     comments : Dict[Optional[int], Comments]
         The comments of the `pinmesh` line (key: None)
+    rounding_rel_tol : float, optional
+        Relative tolerance for rounding the stored coordinates.
+        Defaults to ``ROUNDING_RELATIVE_TOLERANCE``.
 
     Attributes
     ----------
@@ -585,7 +632,10 @@ class RectangularPinMesh(PinMesh):
                  ndivy:    List[int],
                  ndivz:    List[int],
                  comments: Dict[Optional[int], Comments] = None,
+                 *,
+                 rounding_rel_tol: float = TOL,
     ):
+        super().__init__(rounding_rel_tol=rounding_rel_tol)
         assert len(xvals) > 0, f"len(xvals) = {len(xvals)}"
         assert len(yvals) > 0, f"len(yvals) = {len(yvals)}"
         assert all(val > 0. for val in xvals), f"xvals = {xvals}"
@@ -598,8 +648,8 @@ class RectangularPinMesh(PinMesh):
         assert all(val > 0 for val in ndivx), f"ndivx = {ndivx}"
         assert all(val > 0 for val in ndivy), f"ndivy = {ndivy}"
 
-        self._xvals   = xvals
-        self._yvals   = yvals
+        self._xvals   = self._round_interfaces(xvals, 'X')
+        self._yvals   = self._round_interfaces(yvals, 'Y')
         self._ndivx   = ndivx
         self._ndivy   = ndivy
 
@@ -610,36 +660,24 @@ class RectangularPinMesh(PinMesh):
     def __eq__(self, other: Any) -> bool:
         if self is other:
             return True
-        return (isinstance(other, RectangularPinMesh)           and
-                allclose(self.xvals, other.xvals, rtol=TOL)     and
-                allclose(self.yvals, other.yvals, rtol=TOL)     and
-                allclose(self.zvals, other.zvals, rtol=TOL)     and
-                allclose(self.ndivx, other.ndivx, rtol=TOL)     and
-                allclose(self.ndivy, other.ndivy, rtol=TOL)     and
-                allclose(self.ndivz, other.ndivz, rtol=TOL)
-               )
+        return isinstance(other, RectangularPinMesh) and self._geometry_key() == other._geometry_key()
 
 
     def __hash__(self) -> int:
         if self._cached_hash is None:
-            pitches = {key : relative_round(val, TOL) for key, val in self.pitch.items()}
-            self._cached_hash = hash((tuple(relative_round(val, TOL) for val in self.xvals),
-                                     tuple(relative_round(val, TOL) for val in self.yvals),
-                                     tuple(relative_round(val, TOL) for val in self.zvals),
-                                     tuple(relative_round(val, TOL) for val in self.ndivx),
-                                     tuple(relative_round(val, TOL) for val in self.ndivy),
-                                     tuple(relative_round(val, TOL) for val in self.ndivz),
-                                     tuple(sorted(pitches)),
-                                     self.number_of_material_regions))
+            self._cached_hash = hash(self._geometry_key())
         return self._cached_hash
+
+    def _cross_section_key(self) -> tuple:
+        return 'rec', tuple(self.xvals), tuple(self.yvals), tuple(self.ndivx), tuple(self.ndivy)
 
     def write_to_string(self, prefix: str = "", mpact_ids: Dict[PinMesh, int] = None) -> str:
 
         assert_keys_written(self.comments, ())
 
         mpact_id = 1 if mpact_ids is None else mpact_ids[self]
-        string =  f"pinmesh {mpact_id} rec {list_to_str(self._xvals)} / " \
-               +  f"{list_to_str(self._yvals)} / {list_to_str(self._zvals)} / " \
+        string =  f"pinmesh {mpact_id} rec {list_to_str(self._xvals, rel_tol=None)} / " \
+               +  f"{list_to_str(self._yvals, rel_tol=None)} / {list_to_str(self._zvals, rel_tol=None)} / " \
                +  f"{list_to_str(self._ndivx)} / {list_to_str(self._ndivy)} / {list_to_str(self._ndivz)}"
 
         return write_line(prefix, string, self.comments.get(None))
@@ -699,7 +737,8 @@ class RectangularPinMesh(PinMesh):
                         for y_index in y_material_map
                         for x_index in x_material_map]
 
-        pinmesh = RectangularPinMesh(xvals, yvals, zvals, ndivx, ndivy, ndivz)
+        pinmesh = RectangularPinMesh(xvals, yvals, zvals, ndivx, ndivy, ndivz,
+                                     rounding_rel_tol=self.rounding_rel_tol)
         return pinmesh, material_map
 
     def divide_into_quadrants(self) -> List[List[Tuple[PinMesh, List[int]]]]:
@@ -747,7 +786,9 @@ class RectangularPinMesh(PinMesh):
                             for y_index in y_material_map
                             for x_index in x_material_map]
 
-            return RectangularPinMesh(xvals, yvals, zvals, ndivx, ndivy, ndivz), material_map
+            pinmesh = RectangularPinMesh(xvals, yvals, zvals, ndivx, ndivy, ndivz,
+                                         rounding_rel_tol=self.rounding_rel_tol)
+            return pinmesh, material_map
 
         x_mid = self.xvals[-1] / 2.0
         y_mid = self.yvals[-1] / 2.0
@@ -851,6 +892,9 @@ class GeneralCylindricalPinMesh(PinMesh):
         dividing the grid defined by zval
     comments : Dict[Optional[int], Comments]
         The comments of the `pinmesh` line (key: None)
+    rounding_rel_tol : float, optional
+        Relative tolerance for rounding the stored bounds, radii, and axial coordinates.
+        Defaults to ``ROUNDING_RELATIVE_TOLERANCE``.
 
     Attributes
     ----------
@@ -949,7 +993,10 @@ class GeneralCylindricalPinMesh(PinMesh):
         ndiva   : List[int],
         ndivz   : List[int],
         comments: Dict[Optional[int], Comments] = None,
+        *,
+        rounding_rel_tol: float = TOL,
     ):
+        super().__init__(rounding_rel_tol=rounding_rel_tol)
         assert len(r) > 0, f"len(r) = {len(r)}"
         assert all(val > 0. for val in r), f"r = {r}"
         assert xMin < xMax, f"xMin = {xMin}, xMax = {xMax}"
@@ -959,49 +1006,54 @@ class GeneralCylindricalPinMesh(PinMesh):
         assert all(val > 0 for val in ndivr), f"ndivr = {ndivr}"
         assert all(val > 0 for val in ndiva), f"ndiva = {ndiva}"
 
-        self._r       = r
-        self._xMin    = xMin
-        self._xMax    = xMax
-        self._yMin    = yMin
-        self._yMax    = yMax
+        self._r       = self._round_interfaces(r, 'R')
+        self._xMin, self._xMax = self._round_bounds(xMin, xMax)
+        self._yMin, self._yMax = self._round_bounds(yMin, yMax)
         self._ndivr   = ndivr
         self._ndiva   = ndiva
 
         self._set_axial_mesh(zvals, ndivz)
         self._comments = dict(comments) if comments else {}
 
+    def _round_bounds(self, lower: float, upper: float) -> Tuple[float, float]:
+        """Round each pin width and anchor equal-width slices to the same grid."""
+        width = upper - lower
+        reference_edge = remainder(lower, width)
+        lower_edge_index = round((lower - reference_edge) / width)
+
+        tolerance = self.rounding_rel_tol
+        rounded_width = Decimal(str(relative_round(width, tolerance)))
+        roundoff = 4 * max(ulp(lower), ulp(upper))
+        if abs(reference_edge) <= roundoff:
+            rounded_reference_edge = Decimal(0)
+        elif isclose(abs(reference_edge), width / 2, rel_tol=0.0, abs_tol=roundoff):
+            # The two possible reference edges must differ by one rounded width.
+            rounded_reference_edge = (rounded_width / 2).copy_sign(Decimal(reference_edge))
+        else:
+            rounded_reference_edge = Decimal(str(relative_round(reference_edge, tolerance)))
+
+        rounded_lower = rounded_reference_edge + lower_edge_index * rounded_width
+        rounded_upper = rounded_lower + rounded_width
+        bounds = float(rounded_lower), float(rounded_upper)
+        if bounds[0] >= bounds[1]:
+            raise ValueError(f"Rounding collapses pin bounds ({lower}, {upper}) at tolerance {tolerance}")
+        return bounds
+
 
     def __eq__(self, other: Any) -> bool:
         if self is other:
             return True
-        return (isinstance(other, GeneralCylindricalPinMesh)   and
-                allclose(self.r,     other.r,     rtol=TOL)    and
-                isclose( self.xMin,  other.xMin,  rel_tol=TOL) and
-                isclose( self.xMax,  other.xMax,  rel_tol=TOL) and
-                isclose( self.yMin,  other.yMin,  rel_tol=TOL) and
-                isclose( self.yMax,  other.yMax,  rel_tol=TOL) and
-                allclose(self.zvals, other.zvals, rtol=TOL)    and
-                allclose(self.ndivr, other.ndivr, rtol=TOL)    and
-                allclose(self.ndiva, other.ndiva, rtol=TOL)    and
-                allclose(self.ndivz, other.ndivz, rtol=TOL)
-               )
+        return isinstance(other, GeneralCylindricalPinMesh) and self._geometry_key() == other._geometry_key()
 
 
     def __hash__(self) -> int:
         if self._cached_hash is None:
-            pitches = {key : relative_round(val, TOL) for key, val in self.pitch.items()}
-            self._cached_hash = hash((relative_round(self.xMin, TOL),
-                                      relative_round(self.xMax, TOL),
-                                      relative_round(self.yMin, TOL),
-                                      relative_round(self.yMax, TOL),
-                                      tuple(relative_round(val, TOL) for val in self.r),
-                                      tuple(relative_round(val, TOL) for val in self.zvals),
-                                      tuple(relative_round(val, TOL) for val in self.ndivr),
-                                      tuple(relative_round(val, TOL) for val in self.ndiva),
-                                      tuple(relative_round(val, TOL) for val in self.ndivz),
-                                      tuple(sorted(pitches)),
-                                      self.number_of_material_regions))
+            self._cached_hash = hash(self._geometry_key())
         return self._cached_hash
+
+    def _cross_section_key(self) -> tuple:
+        return ('gcyl', self.xMin, self.xMax, self.yMin, self.yMax,
+                tuple(self.r), tuple(self.ndivr), tuple(self.ndiva))
 
 
     def write_to_string(self, prefix: str = "", mpact_ids: Dict[PinMesh, int] = None) -> str:
@@ -1013,9 +1065,10 @@ class GeneralCylindricalPinMesh(PinMesh):
         assert_keys_written(self.comments, ())
 
         mpact_id = 1 if mpact_ids is None else mpact_ids[self]
-        string =  f"pinmesh {mpact_id} gcyl {list_to_str(self._r_inside_bounds)} / " \
-               +  f"{list_to_str([self._xMin, self._xMax, self._yMin, self._yMax])} / " \
-               +  f"{list_to_str(self._zvals)} / {list_to_str(self._ndivr_inside_bounds)} / " \
+        bounds = [self.xMin, self.xMax, self.yMin, self.yMax]
+        string =  f"pinmesh {mpact_id} gcyl {list_to_str(self._r_inside_bounds, rel_tol=None)} / " \
+               +  f"{list_to_str(bounds, rel_tol=None)} / " \
+               +  f"{list_to_str(self._zvals, rel_tol=None)} / {list_to_str(self._ndivr_inside_bounds)} / " \
                +  f"{list_to_str(self._ndiva_inside_bounds)} / {list_to_str(self._ndivz)}"
 
         return write_line(prefix, string, self.comments.get(None))
@@ -1118,7 +1171,8 @@ class GeneralCylindricalPinMesh(PinMesh):
                         for radial_region_index in radial_material_map]
 
         pinmesh = GeneralCylindricalPinMesh(new_r, self.xMin, self.xMax, self.yMin, self.yMax,
-                                            new_zvals, new_ndivr, new_ndiva, new_ndivz)
+                                            new_zvals, new_ndivr, new_ndiva, new_ndivz,
+                                            rounding_rel_tol=self.rounding_rel_tol)
         return pinmesh, material_map
 
     def divide_into_quadrants(self) -> List[List[Tuple[PinMesh, List[int]]]]:
@@ -1143,7 +1197,8 @@ class GeneralCylindricalPinMesh(PinMesh):
                           yMin: float,
                           yMax: float) -> Tuple[PinMesh, List[int]]:
             pinmesh = GeneralCylindricalPinMesh(self.r[:], xMin, xMax, yMin, yMax,
-                                                self.zvals[:], self.ndivr[:], self.ndiva[:], self.ndivz[:])
+                                                self.zvals[:], self.ndivr[:], self.ndiva[:], self.ndivz[:],
+                                                rounding_rel_tol=self.rounding_rel_tol)
             return pinmesh, material_map[:]
 
         x_mid = (self.xMin + self.xMax) / 2.0
@@ -1156,8 +1211,8 @@ class GeneralCylindricalPinMesh(PinMesh):
 
 
     def _set_pitch(self) -> None:
-        self._pitch = {'X' : self.xMax - self.xMin,
-                       'Y' : self.yMax - self.yMin,
+        self._pitch = {'X' : float(Decimal(str(self.xMax)) - Decimal(str(self.xMin))),
+                       'Y' : float(Decimal(str(self.yMax)) - Decimal(str(self.yMin))),
                        'Z' : self.zvals[-1]}
 
     def _set_number_of_material_regions(self) -> None:
