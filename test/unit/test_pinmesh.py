@@ -72,7 +72,7 @@ def rectangular_pinmesh():
 def equal_rectangular_pinmesh():
     xvals = [1.0*(1+TOL), 2.0*(1-TOL), 3.0*(1+TOL)]
     yvals = [1.0*(1-TOL), 2.0*(1+TOL), 3.0*(1+TOL)]
-    zvals = [1.0*(1+TOL), 2.0*(1+TOL), 3.0*(1-TOL)]
+    zvals = [1.0, 2.0, 3.0]
     ndivx = [10, 10, 10]
     ndivy = [10, 10, 10]
     ndivz = [5, 5, 5]
@@ -256,7 +256,7 @@ def equal_general_cylindrical_pinmesh():
     r = [0.5*(1+TOL), 1.0*(1-TOL), 1.5*(1+TOL)]
     xMin, xMax = -1.0*(1+TOL), 1.0*(1-TOL)
     yMin, yMax = -1.0*(1-TOL), 1.0*(1+TOL)
-    zvals = [1.0*(1-TOL), 2.0*(1+TOL), 3.0*(1-TOL)]
+    zvals = [1.0, 2.0, 3.0]
     ndivr = [1, 2, 2]
     ndiva = [8, 8, 8, 8, 8, 8]
     ndivz = [5, 5, 5]
