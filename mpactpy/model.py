@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional, Union
 
 from mpactpy.core import Core
 from mpactpy.key_value_block import KeyValueBlock
-from mpactpy.utils import list_to_str, num_to_str
+from mpactpy.utils import list_to_str
 
 
 Settings = Union[KeyValueBlock, Dict[str, str]]
@@ -141,9 +141,9 @@ class Model():
             string += self.trans.write_to_string(prefix) + "\n"
 
         string += "GEOM\n"
-        string += prefix + f"mod_dim {num_to_str(self.core.mod_dim['X'])} " + \
-                                   f"{num_to_str(self.core.mod_dim['Y'])} " + \
-                                   f"{list_to_str(self.core.mod_dim['Z'])}\n\n"
+        mod_dim = self.core.mod_dim
+        dimensions = [mod_dim['X'], mod_dim['Y'], *mod_dim['Z']]
+        string += prefix + f"mod_dim {list_to_str(dimensions, rel_tol=None)}\n\n"
 
         for pinmesh in self.core.pinmeshes:
             string += pinmesh.write_to_string(prefix, pinmesh_ids)

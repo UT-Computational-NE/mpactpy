@@ -1,4 +1,5 @@
 from __future__ import annotations
+from decimal import Decimal
 from typing import Dict, List, Any, TypedDict, Tuple, Optional, Collection
 from math import isclose
 
@@ -112,10 +113,11 @@ class Module():
         assert all(isclose(pin.pitch['Z'], self.pin_map[0][0].pitch['Z'])
                    for row in self.pin_map for pin in row)
 
-        x_pitch     = sum(self.pin_map[0][j].pitch['X'] for j in range(self.nx))
-        y_pitch     = sum(self.pin_map[i][0].pitch['Y'] for i in range(self.ny))
-        z_pitch     = self.pin_map[0][0].pitch['Z'] * self.nz
-        self._pitch = {'X': x_pitch, 'Y': y_pitch, 'Z': z_pitch}
+        # Sum the same decimal pitches that the pin meshes describe in the deck.
+        x_pitch = sum(Decimal(str(pin.pitch['X'])) for pin in self.pin_map[0])
+        y_pitch = sum(Decimal(str(row[0].pitch['Y'])) for row in self.pin_map)
+        z_pitch = Decimal(str(self.pin_map[0][0].pitch['Z'])) * self.nz
+        self._pitch = {'X': float(x_pitch), 'Y': float(y_pitch), 'Z': float(z_pitch)}
 
         self._pins      = unique([pin for row in self.pin_map for pin in row])
         self._pinmeshes = unique([pin.pinmesh for pin in self.pins])
