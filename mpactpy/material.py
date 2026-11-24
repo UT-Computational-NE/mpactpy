@@ -498,7 +498,8 @@ class Material():
 
         mpact_material = Material(temperature      = temperature,
                                   number_densities = number_densities,
-                                  mpact_specs      = mpact_specs)
+                                  mpact_specs      = mpact_specs,
+                                  name             = material.name or None)
         return mpact_material
 
     @staticmethod
