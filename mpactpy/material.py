@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Mapping, Optional, Any, Tuple, Union
+from typing import Collection, Dict, List, Mapping, Optional, Any, Tuple, Union
 from dataclasses import dataclass, field
 from collections import defaultdict
 from math import isclose
@@ -314,6 +314,43 @@ class Material():
     def __getstate__(self) -> Dict[str, Any]:
         # String hashes differ between processes, so a cached hash must not be pickled
         return {**self.__dict__, "_cached_hash": None}
+
+    @staticmethod
+    def select_by_name(materials: Collection[Material],
+                       contains: Collection[str],
+                       *,
+                       case_sensitive: bool = False) -> List[Material]:
+        """Select materials whose names contain any of the supplied strings.
+
+        Parameters
+        ----------
+        materials : Collection[Material]
+            The material instances to search. Unnamed materials are skipped.
+        contains : Collection[str]
+            Name substrings to match. Empty strings are ignored.
+        case_sensitive : bool, optional
+            Match case exactly when True. Defaults to False.
+
+        Returns
+        -------
+        List[Material]
+            The matching original instances in iteration order. Distinct
+            instances with equal material properties are retained.
+        """
+        substrings = tuple(text if case_sensitive else text.casefold() for text in contains if text)
+        if not substrings:
+            return []
+
+        matches = []
+        for material in materials:
+            name = material.name
+            if not name:
+                continue
+            if not case_sensitive:
+                name = name.casefold()
+            if any(text in name for text in substrings):
+                matches.append(material)
+        return matches
 
     @dataclass
     class MixPolicy():
