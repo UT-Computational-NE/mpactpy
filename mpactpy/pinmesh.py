@@ -252,7 +252,7 @@ class PinMesh(ABC):
     pitch : Dict[str, float]
         The pitch of the pin mesh in each axis direction (keys: 'X', 'Y', 'Z')
     rounding_rel_tol : float
-        Relative tolerance used to round geometry when creating or updating the mesh.
+        Relative tolerance used to round the transverse geometry.
     regions_inside_bounds = List[int]
         The list of material regions that lie within the bounds of the pinmesh
     comments : Dict[Optional[int], Comments]
@@ -379,8 +379,6 @@ class PinMesh(ABC):
     def set_axial_mesh(self, zvals: List[float] = None, ndivz: List[int] = None) -> None:
         """ A method for setting the axial meshing of a pinmesh
 
-        This drops the inline comment of the `pinmesh` line.
-
         Parameters
         ----------
         zvals : List[float]
@@ -402,7 +400,7 @@ class PinMesh(ABC):
         assert (len(ndivz) == len(zvals)), f"len(ndivz) = {len(ndivz)}, len(zvals) = {len(zvals)}"
         assert all(val > 0 for val in ndivz), f"ndivz = {ndivz}"
 
-        self._zvals = self._round_interfaces(zvals, 'Z')
+        self._zvals = list(zvals)
         self._ndivz = ndivz
 
         self._set_pitch()
@@ -567,7 +565,7 @@ class RectangularPinMesh(PinMesh):
     comments : Dict[Optional[int], Comments]
         The comments of the `pinmesh` line (key: None)
     rounding_rel_tol : float, optional
-        Relative tolerance for rounding the stored coordinates.
+        Relative tolerance for rounding the stored X and Y coordinates.
         Defaults to ``ROUNDING_RELATIVE_TOLERANCE``.
 
     Attributes
@@ -893,7 +891,7 @@ class GeneralCylindricalPinMesh(PinMesh):
     comments : Dict[Optional[int], Comments]
         The comments of the `pinmesh` line (key: None)
     rounding_rel_tol : float, optional
-        Relative tolerance for rounding the stored bounds, radii, and axial coordinates.
+        Relative tolerance for rounding the stored X/Y bounds and radii.
         Defaults to ``ROUNDING_RELATIVE_TOLERANCE``.
 
     Attributes

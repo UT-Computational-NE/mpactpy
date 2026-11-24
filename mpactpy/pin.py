@@ -191,8 +191,6 @@ class Pin():
     def axial_merge(self, pin: Pin) -> Pin:
         """ Method for axially merging a pin with this pin
 
-        The merged axial mesh uses this pin's rounding tolerance.
-
         Parameters
         ----------
         pin : Pin
@@ -405,7 +403,7 @@ def build_rec_pin(thicknesses:             Dict[str, List[float]],
         The target side length of the cells (cm).  Defaults to infinity for dimensions where no targets provided.
         (keys: "X", "Y", "Z")
     rounding_rel_tol : float
-        Relative tolerance used to round pin mesh coordinates.
+        Relative tolerance used to round the X and Y coordinates.
 
     Returns
     -------
@@ -458,7 +456,7 @@ def build_gcyl_pin(bounds:                  Tuple[float, float, float, float],
         The target side length of the cells (cm). Defaults to infinity for dimensions where no targets provided.
         (keys: "R", "S", "Z")
     rounding_rel_tol : float
-        Relative tolerance used to round pin mesh coordinates.
+        Relative tolerance used to round the X/Y bounds and radii.
 
     Returns
     -------
